@@ -19,8 +19,8 @@
 #
 # OPTIONS:
 # [data_path]   -> Base path to access the directory with movie data.
-# [val_csv]     -> Name of the validation CSV file. Just name, since we assume it is in data_path.
-# [test_csv]    -> Name of the test CSV file. Just name, since we assume it is in data_path.
+# [val_csv]     -> Name of the validation CSV file. Just filename, since we assume it is in data_path.
+# [test_csv]    -> Name of the test CSV file. Just filename, since we assume it is in data_path.
 # [direct_json] -> Name of the directing JSON file, assuming it is in data_path.
 # [write_json]  -> Name of the writing JSON file, assuming it is in data_path.
 
