@@ -65,7 +65,13 @@ echo "PIPELINE: Initial setup verified. Proceeding with pipeline..."; echo
 
 ########################### RUN PIPELINE ###########################
 
-# STEP 3: Run the pipeline.
+# STEP 3: Activate targe conda environment.
+ENV_NAME="movie_classifier_env"
+echo "Activating '$ENV_NAME' environment..."; echo
+eval "$(conda shell.bash hook)"
+conda activate $ENV_NAME
+
+# STEP 4: Run the pipeline.
 python movie-pipeline/pipeline.py \
     --data "$DATA_PATH" \
     --val "$VAL_CSV" \
