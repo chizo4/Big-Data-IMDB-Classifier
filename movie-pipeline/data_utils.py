@@ -19,8 +19,11 @@ VERSION:
 
 import glob
 from logger import get_logger
-import os
+import numpy as np
+import pandas as pd
+from pyspark.ml.feature import VectorAssembler, StandardScaler
 from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, when, isnan, count, log1p
 
 
 class DataUtils:
@@ -93,7 +96,6 @@ class DataUtils:
             DataUtils.logger.info(f'ERROR: No TRAIN files found matching pattern "{train_path_pattern}".')
             raise ValueError(f'ERROR: No TRAIN files found matching pattern "{train_path_pattern}".')
         train_files.sort()
-        ######
         DataUtils.logger.info(f'Found {len(train_files)} training files:\n{train_files}')
         # Load and union all train data files.
         train_df = None
@@ -145,9 +147,90 @@ class DataUtils:
         train_df = DataUtils.load_train_csv(spark, train_path)
         data_dict = {
             'train': train_df,
-            'validation': val_df,
+            'val': val_df,
             'test': test_df,
             'directing': directing_df,
             'writing': writing_df
         }
         return data_dict
+
+    @staticmethod
+    def preprocess_numeric_cols(df: 'DataFrame', cols: list, num_type: str = 'integer') -> 'DataFrame':
+        '''
+        Handle pre-processing operations for numeric columns.
+
+            Parameters:
+            -----------
+            df : DataFrame
+                The input DataFrame to preprocess.
+            cols : list
+                The list of numeric column names to preprocess.
+            num_type : str
+                The target numeric type for conversion.
+
+            Returns:
+            -----------
+            df : DataFrame
+                The preprocessed DataFrame.
+        '''
+        for col_name in cols:
+            # Convert missing values to None before type conversion. Required for Spark type casting operations.
+            df = df.withColumn(col_name, when(col('runtimeMinutes') == '\\N', None).otherwise(col(col_name)))
+            # Convert the current column to the proper numeric type: INT.
+            df = df.withColumn(col_name, col(col_name).cast(num_type))
+        return df
+
+    @staticmethod
+    def inject_median_values(df: 'DataFrame', col_name: str) -> 'DataFrame':
+        '''
+        Inject median values for missing entries in a numeric column.
+
+            Parameters:
+            -----------
+            df : DataFrame
+                The input DataFrame to preprocess.
+            col_name : list
+                The name of the column to be processed.
+
+            Returns:
+            -----------
+            df : DataFrame
+                The DataFrame with imputed median values.
+        '''
+        # Compute median for the target column.
+        col_median_int = int(df.approxQuantile(col_name, [0.5], 0.0)[0])
+        DataUtils.logger.info(f'Median: {col_name} = {col_median_int}')
+        # Fill missing values with the computed median.
+        df = df.withColumn(col_name, when(col(col_name).isNull(), col_median_int).otherwise(col(col_name)))
+        return df
+
+    @staticmethod
+    def preprocess(df: 'DataFrame') -> 'DataFrame':
+        '''
+        Preprocess the data by handling missing values, fixing data
+        types, normalizing text fields, handling outliers, etc.
+
+        FULL PROCEDURE:
+        (1) Pre-process numeric columns by converting them to integer type.
+        (2) Inject median values for missing records: runtimeMinutes and numVotes.
+        (3) Log-transform numVotes to reduce high skewness.
+
+            Parameters:
+            -----------
+            df : DataFrame
+                The input dataframe to preprocess.
+
+            Returns:
+            -----------
+            df : DataFrame
+                The preprocessed DataFrame.
+        '''
+        # (1) Pre-process numeric columns.
+        numeric_cols = ['runtimeMinutes', 'numVotes', 'startYear', 'endYear']
+        df = DataUtils.preprocess_numeric_cols(df, numeric_cols)
+        # (2) Inject median values for missing records: "runtimeMinutes" and "numVotes".
+        df = DataUtils.inject_median_values(df, 'runtimeMinutes')
+        df = DataUtils.inject_median_values(df, 'numVotes')
+        # (3) Log-transform "numVotes" to reduce skewness.
+        df = df.withColumn('numVotes', log1p(col('numVotes')))
+        return df

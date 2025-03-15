@@ -143,48 +143,18 @@ class Pipeline:
             writing_path=self.writing_json_path
         )
         Pipeline.logger.info('DATA LOADED!')
-
-    #     # Preprocess and perform feature engineering on training data
-    #     # train_df = data_loader.preprocess(data["train"])
-    #     # train_df = data_loader.feature_engineering(train_df)
-
-    #     # # Preprocess validation and test sets similarly (simplified here)
-    #     # val_df = data_loader.preprocess(data["validation"])
-    #     # val_df = data_loader.feature_engineering(val_df)
-    #     # test_df = data_loader.preprocess(data["test"])
-    #     # test_df = data_loader.feature_engineering(test_df)
-
-    #     # # Convert Spark DataFrames to Pandas DataFrames for torch training
-    #     # train_pd = data_loader.to_pandas(train_df)
-    #     # val_pd = data_loader.to_pandas(val_df)
-    #     # test_pd = data_loader.to_pandas(test_df)
-
-    #     # # Build torch datasets from Pandas DataFrames
-    #     # # Determine the feature dimension from the first row's features
-    #     # feature_dim = len(train_pd["features"].iloc[0])
-    #     # classifier = Classifier(input_dim=feature_dim, epochs=10)
-
-    #     # train_dataset = classifier.build_dataset(train_pd)
-    #     # val_dataset = classifier.build_dataset(val_pd)
-    #     # test_dataset = classifier.build_dataset(test_pd)
-
-    #     # # Train the model
-    #     # print("Training the PyTorch model...")
-    #     # classifier.train(train_dataset)
-
-    #     # # Evaluate on the validation set
-    #     # print("Evaluating the model...")
-    #     # classifier.evaluate(val_dataset)
-
-    #     # # Generate predictions on the test set
-    #     # print("Generating predictions for the test set...")
-    #     # test_preds = classifier.predict(test_dataset)
-
-    #     # # Save predictions to a CSV file (using Pandas)
-    #     # test_pd["prediction"] = test_preds
-    #     # output_path = "output/test_predictions.csv"
-    #     # test_pd[["tconst", "prediction"]].to_csv(output_path, index=False)
-    #     # print(f"Pipeline executed successfully. Predictions saved to {output_path}")
+        # Pre-process data.
+        Pipeline.logger.info('PREPROCESSING DATA...')
+        data['train'].show(20, truncate=False)
+        train_df = DataUtils.preprocess(data['train'])
+        train_df.show(20, truncate=False)
+        # val_df = DataUtils.preprocess(data['val'])
+        # test_df = DataUtils.preprocess(data['test'])
+        # Pipeline.logger.info('APPLYING FEATURE ENGINEERING...')
+        # train_df = DataUtils.feature_engineering(train_df)
+        # val_df = DataUtils.feature_engineering(val_df)
+        # test_df = DataUtils.feature_engineering(test_df)
+        Pipeline.logger.info('DATA PREPARATION COMPLETE!')
 
 
 if __name__ == '__main__':
