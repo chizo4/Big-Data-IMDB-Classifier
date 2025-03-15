@@ -23,7 +23,9 @@ import numpy as np
 import pandas as pd
 from pyspark.ml.feature import VectorAssembler, StandardScaler
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, when, isnan, count, log1p
+from pyspark.sql.functions import col, when, log1p
+import re
+import unicodedata
 
 
 class DataUtils:
@@ -189,7 +191,7 @@ class DataUtils:
             -----------
             df : DataFrame
                 The input DataFrame to preprocess.
-            col_name : list
+            col_name : str
                 The name of the column to be processed.
 
             Returns:
@@ -205,6 +207,33 @@ class DataUtils:
         return df
 
     @staticmethod
+    def preprocess_text(text: str) -> str:
+        '''
+        Cleans a given text string by:
+        - Converting accented characters to standard English letters.
+        - Removing unnecessary punctuation.
+        - Stripping leading/trailing spaces.
+        - Formatting to title-case.
+
+            Parameters:
+            -----------
+            text : str
+                The input text string.
+
+            Returns:
+            -----------
+            str : The cleaned text string.
+        '''
+        if text is None or text.strip() == '':
+            return None
+        # Normalize accented characters to ASCII.
+        text = unicodedata.normalize('NFKD', text).encode('ASCII', 'ignore').decode('utf-8')
+        # Remove any remaining unwanted special characters but keep letters, numbers, and spaces.
+        text = re.sub(r'[^a-zA-Z0-9\s]', '', text)
+        # Trim any spaces and convert to title-case.
+        return text.strip().title()
+
+    @staticmethod
     def preprocess(df: 'DataFrame') -> 'DataFrame':
         '''
         Preprocess the data by handling missing values, fixing data
@@ -214,6 +243,8 @@ class DataUtils:
         (1) Pre-process numeric columns by converting them to integer type.
         (2) Inject median values for missing records: runtimeMinutes and numVotes.
         (3) Log-transform numVotes to reduce high skewness.
+        (4) Ensure startYear ≤ endYear and handle missing values.
+        (5) Normalize text fields ("primaryTitle", "originalTitle").
 
             Parameters:
             -----------
@@ -233,4 +264,20 @@ class DataUtils:
         df = DataUtils.inject_median_values(df, 'numVotes')
         # (3) Log-transform "numVotes" to reduce skewness.
         df = df.withColumn('numVotes', log1p(col('numVotes')))
+        # (4) Ensure startYear ≤ endYear and handle missing values.
+        df = df.withColumn('startYear', when(col('startYear').isNull(), col('endYear')).otherwise(col('startYear')))
+        df = df.withColumn('endYear', when(col('endYear').isNull(), col('startYear')).otherwise(col('endYear')))
+        df = df.withColumn('endYear', when(col('endYear') < col('startYear'), col('startYear')).otherwise(col('endYear')))
+        # (5) Normalize text title fields and handle missing records.
+        df = df.toPandas()
+        df['primaryTitle'] = df['primaryTitle'].apply(DataUtils.preprocess_text)
+        df['originalTitle'] = df['originalTitle'].apply(DataUtils.preprocess_text)
+        df['primaryTitle'] = df.apply(
+            lambda row: row['originalTitle'] if pd.isna(row['primaryTitle']) else row['primaryTitle'], axis=1
+        )
+        df['originalTitle'] = df.apply(
+            lambda row: row['primaryTitle'] if pd.isna(row['originalTitle']) else row['originalTitle'], axis=1
+        )
+        # Back to Spark DataFrame.
+        df = SparkSession.builder.getOrCreate().createDataFrame(df)
         return df

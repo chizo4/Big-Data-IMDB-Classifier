@@ -145,12 +145,13 @@ class Pipeline:
         Pipeline.logger.info('DATA LOADED!')
         # Pre-process data.
         Pipeline.logger.info('PREPROCESSING DATA...')
-        data['train'].show(20, truncate=False)
+        # data['train'].show(20, truncate=False)
         train_df = DataUtils.preprocess(data['train'])
-        train_df.show(20, truncate=False)
-        # val_df = DataUtils.preprocess(data['val'])
-        # test_df = DataUtils.preprocess(data['test'])
-        # Pipeline.logger.info('APPLYING FEATURE ENGINEERING...')
+        # train_df.show(20, truncate=False)
+        val_df = DataUtils.preprocess(data['val'])
+        test_df = DataUtils.preprocess(data['test'])
+        # Apply feature engineering procedures.
+        Pipeline.logger.info('APPLYING FEATURE ENGINEERING...')
         # train_df = DataUtils.feature_engineering(train_df)
         # val_df = DataUtils.feature_engineering(val_df)
         # test_df = DataUtils.feature_engineering(test_df)
