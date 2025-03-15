@@ -54,8 +54,8 @@ class Pipeline:
         self.directing_json_path = f'{self.data_path}/{self.args.directing}'
         self.writing_json_path = f'{self.data_path}/{self.args.writing}'
         # Initialize VAL and TEST results files.
-        self.val_pred_path = self.set_pred_file(set_name='val')
-        self.test_pred_path = self.set_pred_file(set_name='test')
+        self.val_pred_path = self.set_pred_file(set_name='val', data_path=self.data_path)
+        self.test_pred_path = self.set_pred_file(set_name='test', data_path=  self.data_path)
         # Initialize Spark session.
         self.spark = SparkSession.builder.appName('MoviePipeline').getOrCreate()
 
@@ -102,13 +102,16 @@ class Pipeline:
         )
         return parser.parse_args()
 
-    def set_pred_file(self: 'Pipeline', set_name: str) -> str:
+    @staticmethod
+    def set_pred_file(data_path: str, set_name: str) -> str:
         '''
         Initialize the CSV prediction file for the classification task.
         Annotate it with the current timestamp and set name.
 
             Parameters:
             -------------------------
+            data_path : str
+                Base path to access the task data.
             set_name : str
                 Name of the set to initialize the prediction file for.
 
@@ -118,8 +121,8 @@ class Pipeline:
                 Customized path name to the prediction file.
         '''
         curr_time = datetime.now().strftime('%Y%m%d_%H%M%S')
-        pred_path = self.RESULT_BASE_PATH
-        pred_path = pred_path.replace('{data_path}', self.data_path)
+        pred_path = Pipeline.RESULT_BASE_PATH
+        pred_path = pred_path.replace('{data_path}', data_path)
         pred_path = pred_path.replace('{set_name}', set_name)
         pred_path = pred_path.replace('{timestamp}', curr_time)
         return pred_path
