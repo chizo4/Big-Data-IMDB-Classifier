@@ -20,9 +20,9 @@ import argparse
 from data_utils import DataUtils
 from datetime import datetime
 from logger import get_logger
-import pandas as pd
+from pyspark.ml.feature import StringIndexer, VectorAssembler
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, when
+from pyspark.sql.functions import col, when, collect_list, concat_ws
 
 
 class Pipeline:
@@ -41,14 +41,15 @@ class Pipeline:
     logger = get_logger(__name__)
     # Base path for results to be customized for the task-specific data.
     RESULT_BASE_PATH = r'results/{data_path}/{set_name}_prediction_{timestamp}.csv'
-    # Standard numeric cols in data.
+    # Standard cols to follow in data.
     NUMERIC_COLS = ['runtimeMinutes', 'numVotes', 'startYear', 'endYear']
+    FEATURE_COLS = ['runtimeMinutes', 'numVotes', 'startYear', 'endYear', 'writers_index', 'directors_index']
 
     def __init__(self: 'Pipeline') -> None:
         '''
         Initialize the Pipeline class.
         '''
-        self.df = None
+        self.data_dict = {}
         self.median_dict = {
             'runtimeMinutes': None,
             'numVotes': None
@@ -136,13 +137,35 @@ class Pipeline:
         pred_path = pred_path.replace('{timestamp}', curr_time)
         return pred_path
 
+    def load_data(self: 'Pipeline') -> None:
+        '''
+        Load data from CSV and JSON files into Spark DataFrames
+        to build a full-data dictionary.
+        '''
+        # Load JSON files with metadata for directing and writing.
+        writing_df = DataUtils.load_json(self.spark, self.writing_json_path)
+        # For directing JSON, merge movie and director dictionaries.
+        directing_df = DataUtils.merge_directing_json(self.spark, self.directing_json_path)
+        # Load CSV files.
+        val_df = DataUtils.load_csv(self.spark, self.val_csv_path)
+        test_df = DataUtils.load_csv(self.spark, self.test_csv_path)
+        # For train data: detect all CSV files and load them accordingly.
+        train_df = DataUtils.load_train_csv(self.spark, self.train_csv_path)
+        self.data_dict = {
+            'train': train_df,
+            'val': val_df,
+            'test': test_df,
+            'directing': directing_df,
+            'writing': writing_df
+        }
+
     def preprocess(self: 'Pipeline', df: 'DataFrame', train: bool=False) -> 'DataFrame':
         '''
         Preprocess the data by handling missing values, fixing data types,
         normalizing text fields, handling outliers, etc. Utilizes various
         atomic functions from DataUtils.
 
-            FULL PROCEDURE:
+            PROCEDURE:
             (1) Pre-process numeric columns by converting them to integer type.
             (2) Inject median values for missing records: runtimeMinutes and numVotes.
             (3) Ensure startYear ≤ endYear and handle missing values.
@@ -177,60 +200,82 @@ class Pipeline:
         df = df.withColumn('endYear', when(col('endYear').isNull(), col('startYear')).otherwise(col('endYear')))
         df = df.withColumn('endYear', when(col('endYear') < col('startYear'), col('startYear')).otherwise(col('endYear')))
         # (4) Normalize text title fields and handle missing records.
-        df = df.toPandas()
-        df['primaryTitle'] = df['primaryTitle'].apply(DataUtils.preprocess_text)
-        df['originalTitle'] = df['originalTitle'].apply(DataUtils.preprocess_text)
-        df['primaryTitle'] = df.apply(
-            lambda row: row['originalTitle'] if pd.isna(row['primaryTitle']) else row['primaryTitle'], axis=1
-        )
-        df['originalTitle'] = df.apply(
-            lambda row: row['primaryTitle'] if pd.isna(row['originalTitle']) else row['originalTitle'], axis=1
-        )
-        # (Back to Spark DataFrame.)
-        df = SparkSession.builder.getOrCreate().createDataFrame(df)
+        df = DataUtils.normalize_text_cols(df)
+        return df
+
+    def engineer_features(self: 'Pipeline', df: 'DataFrame') -> 'DataFrame':
+        '''
+        Apply feature engineering to the DataFrame, handling metadata.
+
+            PROCEDURE:
+            (1) Merging metadata (directors, writers) to include relevant categorical features.
+            (2) Handling categorical features via indexing.
+            (3) Assembling numerical features into a vector for RandomForestClassifier.
+
+            Parameters:
+            -----------
+            df : DataFrame
+                The input dataframe to be transformed.
+
+            Returns:
+            -----------
+            df : DataFrame
+                The transformed DataFrame ready for training.
+        '''
+        # (1) Join movie dataset with writing and directing metadata. Some movies have
+        #     multiple writers and/or directors, thus we need to first aggregate them.
+        writing_df = self.data_dict['writing'].groupBy('movie') \
+            .agg(collect_list('writer').alias('writers_array')) \
+            .withColumn('writers', concat_ws(',', 'writers_array')) \
+            .drop('writers_array')
+        directing_df = self.data_dict['directing'].groupBy('movie') \
+            .agg(collect_list('director').alias('directors_array')) \
+            .withColumn('directors', concat_ws(',', 'directors_array')) \
+            .drop('directors_array')
+        df = df.join(writing_df, df['tconst'] == writing_df['movie'], how='left').drop('movie')
+        df = df.join(directing_df, df['tconst'] == directing_df['movie'], how='left').drop('movie')
+        # Handle NULL cols for writers and directors.
+        df = df.withColumn('writers', when(col('writers').isNull(), 'unknown').otherwise(col('writers')))
+        df = df.withColumn('directors', when(col('directors').isNull(), 'unknown').otherwise(col('directors')))
+        # (2) Handle categorical variables by indexing them.
+        indexer_writers = StringIndexer(inputCol='writers', outputCol='writers_index', handleInvalid='keep')
+        indexer_directors = StringIndexer(inputCol='directors', outputCol='directors_index', handleInvalid='keep')
+        df = indexer_writers.fit(df).transform(df)
+        df = indexer_directors.fit(df).transform(df)
+        # (3) Assemble all feature columns into a single feature vector.
+        assembler = VectorAssembler(inputCols=self.FEATURE_COLS, outputCol='features')
+        df = assembler.transform(df)
+        # Drop unused columns (they were converted to indexed features).
+        df = df.drop('writers', 'directors')
         return df
 
     def __call__(self: 'Pipeline') -> None:
         '''
         Main method to call the pipeline functionalities.
 
-        PROCEDURE:
-        (1) Load data.
-        (2) Pre-process data.
-        (3) Apply feature engineering.
-        (4) TODO:
+            PROCEDURE:
+            (1) Load data.
+            (2) Pre-process data.
+            (3) Apply feature engineering.
+            (4) TODO: Train model.
+            (5) TODO: Predict via model.
         '''
         # (1) Load data.
         Pipeline.logger.info('LOADING DATA...')
-        data = DataUtils.load_data(
-            spark=self.spark,
-            train_path=self.train_csv_path,
-            val_path=self.val_csv_path,
-            test_path=self.test_csv_path,
-            directing_path=self.directing_json_path,
-            writing_path=self.writing_json_path
-        )
-        Pipeline.logger.info('DATA LOADED!')
+        self.load_data()
+        Pipeline.logger.info('DATA: LOADED!')
         # (2) Pre-process data: TRAIN, VAL, TEST.
         Pipeline.logger.info('PRE-PROCESSING DATA...')
-        train_df = self.preprocess(data['train'], train=True)
-        val_df = self.preprocess(data['val'])
-        test_df = self.preprocess(data['test'])
-        Pipeline.logger.info('DATA PRE-PROCESSING COMPLETE!')
-        # (3) TODO: Apply feature engineering procedures.
-
-        # Pipeline.logger.info('APPLYING FEATURE ENGINEERING...')
-        # train_df = DataUtils.engineer_features(
-        #     df=train_df, directing_df=data['directing'], writing_df=data['writing']
-        # )
-        # train_df.show(20, truncate=False)
-        # val_df = DataUtils.engineer_features(
-        #     df=val_df, directing_df=data['directing'], writing_df=data['writing']
-        # )
-        # test_df = DataUtils.engineer_features(
-        #     df=test_df, directing_df=data['directing'], writing_df=data['writing']
-        # )
-        Pipeline.logger.info('FEATURE ENGINEERING COMPLETE!')
+        train_df = self.preprocess(self.data_dict['train'], train=True)
+        # val_df = self.preprocess(self.data_dict['val'])
+        # test_df = self.preprocess(self.data_dict['test'])
+        Pipeline.logger.info('DATA PRE-PROCESSING: COMPLETE!')
+        # (3) Apply feature engineering procedures.
+        Pipeline.logger.info('APPLYING FEATURE ENGINEERING...')
+        train_df = self.engineer_features(train_df)
+        # val_df = self.engineer_features(val_df)
+        # test_df = self.engineer_features(test_df)
+        Pipeline.logger.info('FEATURE ENGINEERING: COMPLETE!')
 
 
 if __name__ == '__main__':
