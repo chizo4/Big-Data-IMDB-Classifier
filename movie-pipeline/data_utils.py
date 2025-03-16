@@ -18,9 +18,11 @@ VERSION:
 
 
 import glob
+import json
 from logger import get_logger
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, when
+import pandas as pd
 import re
 import unicodedata
 
@@ -54,6 +56,42 @@ class DataUtils:
             spark.DataFrame : The loaded Spark DataFrame.
         '''
         return spark.read.json(json_path)
+
+    @staticmethod
+    def merge_directing_json(spark: SparkSession, directing_json_path: str) -> 'DataFrame':
+        '''
+        Merge movie and director records for directing JSON, since
+        the raw data is not properly setup for further merging.
+
+            Parameters:
+            -----------
+            spark : SparkSession
+                The active Spark session for loading data.
+            directing_json_path : str
+                The path to the JSON file containing movie and director records.
+
+            Returns:
+            -----------
+            df: spark.DataFrame
+                The merged Spark DataFrame.
+        '''
+        # Merge movie and director records for directing.
+        with open(directing_json_path, 'r') as file:
+            directing_data = json.load(file)
+        movie_dict = directing_data.get('movie', {})
+        director_dict = directing_data.get('director', {})
+        director_pairs = []
+        # Process in smaller chunks to avoid memory issues.
+        common_keys = set(movie_dict.keys()) & set(director_dict.keys())
+        # Create data pairs.
+        for idx in common_keys:
+            director_pairs.append({
+                'movie': movie_dict[idx],
+                'director': director_dict[idx]
+            })
+        # Convert to Spark DataFrame only after processing is complete
+        df = spark.createDataFrame(director_pairs)
+        return df
 
     @staticmethod
     def load_csv(spark: SparkSession, csv_path: str) -> 'DataFrame':
@@ -137,6 +175,38 @@ class DataUtils:
         text = re.sub(r'[^a-zA-Z0-9\s]', '', text)
         # Trim any spaces and convert to title-case.
         return text.strip().title()
+
+    @staticmethod
+    def normalize_text_cols(df: 'DataFrame') -> 'DataFrame':
+        '''
+        Normalize text columns by cleaning the text strings.
+
+            Parameters:
+            -----------
+            df : DataFrame
+                The input DataFrame to preprocess.
+            cols : list
+                The list of text column names to preprocess.
+
+            Returns:
+            -----------
+            df : DataFrame
+                The preprocessed DataFrame.
+        '''
+        # Convert for efficient text processing.
+        df = df.toPandas()
+        df['primaryTitle'] = df['primaryTitle'].apply(DataUtils.preprocess_text)
+        df['originalTitle'] = df['originalTitle'].apply(DataUtils.preprocess_text)
+        # Fill missing values with the other column content.
+        df['primaryTitle'] = df.apply(
+            lambda row: row['originalTitle'] if pd.isna(row['primaryTitle']) else row['primaryTitle'], axis=1
+        )
+        df['originalTitle'] = df.apply(
+            lambda row: row['primaryTitle'] if pd.isna(row['originalTitle']) else row['originalTitle'], axis=1
+        )
+        # (Back to Spark DataFrame.)
+        df = SparkSession.builder.getOrCreate().createDataFrame(df)
+        return df
 
     @staticmethod
     def preprocess_numeric_cols(df: 'DataFrame', cols: list, num_type: str = 'integer') -> 'DataFrame':
