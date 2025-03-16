@@ -19,8 +19,6 @@ VERSION:
 
 import glob
 from logger import get_logger
-from pyspark.ml import Pipeline as SparkPipeline
-from pyspark.ml.feature import VectorAssembler, StandardScaler, StringIndexer, OneHotEncoder
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, when
 import re
