@@ -19,12 +19,10 @@ VERSION:
 
 import glob
 from logger import get_logger
-import numpy as np
-import pandas as pd
 from pyspark.ml import Pipeline as SparkPipeline
 from pyspark.ml.feature import VectorAssembler, StandardScaler, StringIndexer, OneHotEncoder
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, when, log1p
+from pyspark.sql.functions import col, when
 import re
 import unicodedata
 
@@ -32,8 +30,8 @@ import unicodedata
 class DataUtils:
     '''
     -------------------------
-    DataLoader - A utility class for core data-related tasks; e.g., loading data
-                 from CSV and JSON files into Spark DataFrames, atomic pre-processing
+    DataLoader - A utility class for atomic data-related tasks; e.g., loading data
+                 from CSV and JSON files into Spark DataFrames, pre-processing
                  procedures, feature engineering, etc.
     -------------------------
     '''
@@ -116,49 +114,6 @@ class DataUtils:
         return train_df
 
     @staticmethod
-    def load_data(spark: SparkSession, **kwargs) -> dict:
-        '''
-        Load data from CSV and JSON files into Spark DataFrames.
-
-            Parameters:
-            -----------
-            spark : SparkSession
-                The active Spark session for loading data.
-            kwargs : dict
-                Dictionary containing file paths for CSV and JSON datasets;
-                these include train paths, test paths, JSON metadata, etc.
-
-            Returns:
-            -----------
-            data_dict : dict
-                Dictionary containing Spark DataFrames for all loaded datasets.
-        '''
-        # Extract data paths from kwargs.
-        train_path = kwargs.get('train_path')
-        val_path = kwargs.get('val_path')
-        test_path = kwargs.get('test_path')
-        directing_path = kwargs.get('directing_path')
-        writing_path = kwargs.get('writing_path')
-        if not all([train_path, val_path, test_path, directing_path, writing_path]):
-            raise ValueError('ERROR: Missing required file paths in kwargs.')
-        # Load JSON files with metadata.
-        directing_df = DataUtils.load_json(spark, directing_path)
-        writing_df = DataUtils.load_json(spark, writing_path)
-        # Load CSV files.
-        val_df = DataUtils.load_csv(spark, val_path)
-        test_df = DataUtils.load_csv(spark, test_path)
-        # For train data: detect all CSV files and load them accordingly.
-        train_df = DataUtils.load_train_csv(spark, train_path)
-        data_dict = {
-            'train': train_df,
-            'val': val_df,
-            'test': test_df,
-            'directing': directing_df,
-            'writing': writing_df
-        }
-        return data_dict
-
-    @staticmethod
     def preprocess_text(text: str) -> str:
         '''
         Cleans a given text string by:
@@ -232,75 +187,3 @@ class DataUtils:
         col_median_int = int(df.approxQuantile(col_name, [0.5], 0.0)[0])
         DataUtils.logger.info(f'Median: {col_name} = {col_median_int}')
         return col_median_int
-
-
-
-
-
-
-
-
-
-    @staticmethod
-    def engineer_features(df: 'DataFrame', **kwargs) -> 'DataFrame':
-        '''
-        Performs feature engineering on the dataset. Scale numerical columns,
-        encode categorical features, and merge metadata from directing/writing tables.
-
-        PROCEDURE:
-        (1) Merge directing and writing metadata.
-        (2) Convert years to categorical features.
-        (3) Scale numeric features.
-        (4) Set up Spark pipeline.
-        (5) Fit and transform the data.
-        (6) Drop redundant columns.
-
-            Parameters:
-            -----------
-            df : DataFrame
-                The input Spark DataFrame (ideally - processed data).
-            kwargs : dict
-                Dictionary containing dataframes for JSON metadata.
-
-            Returns:
-            -----------
-            df : DataFrame
-                The transformed DataFrame with engineered features.
-        '''
-        # (1) Merge directing and writing metadata.
-        writing_df = kwargs.get('writing_df')
-        writing_df = writing_df.withColumnRenamed('movie', 'tconst').withColumnRenamed('writer', 'writer_id')
-        df = df.join(writing_df, on='tconst', how='left')
-
-
-
-        # directing_df = kwargs.get('directing_df')
-        # directing_df.printSchema()
-        # writing_df.printSchema()
-        # df = df.join(directing_df, on='tconst', how='left')
-        # "Unknown" for missing director/writer IDs.
-        # df = df.fillna({'director_id': 'Unknown', 'writer_id': 'Unknown'})
-        # (2) Convert "startYear" and "endYear" into categorical features to avoid misleading numerical relationships.
-        start_year_indexer = StringIndexer(inputCol='startYear', outputCol='startYear_idx', handleInvalid='keep')
-        end_year_indexer = StringIndexer(inputCol='endYear', outputCol='endYear_idx', handleInvalid='keep')
-        start_year_encoder = OneHotEncoder(inputCol='startYear_idx', outputCol='startYear_encoded')
-        end_year_encoder = OneHotEncoder(inputCol='endYear_idx', outputCol='endYear_encoded')
-        # (3) Convert "runtimeMinutes" and "numVotes" into a single feature vector and apply standard scaling
-        # to prevent larger values (numVotes) from dominating smaller ones (runtimeMinutes), ensuring
-        # balanced feature contributions in ML models.
-        assembler = VectorAssembler(inputCols=['runtimeMinutes', 'numVotes'], outputCol='raw_features')
-        scaler = StandardScaler(inputCol='raw_features', outputCol='scaled_features')
-        # (4) Set up Spark pipeline.
-        pipeline = SparkPipeline(stages=[
-            start_year_indexer,
-            end_year_indexer,
-            start_year_encoder,
-            end_year_encoder,
-            assembler,
-            scaler
-        ])
-        # (5) Fit and transform the data.
-        df = pipeline.fit(df).transform(df)
-        # (6) Drop redundant columns, disregarded after feature engineering.
-        df = df.drop("startYear", "endYear", "startYear_idx", "endYear_idx", "raw_features")
-        return df
