@@ -17,9 +17,9 @@ VERSION:
 
 import json
 import pandas as pd
-import requests
+import ollama
 from pyspark.sql import DataFrame, SparkSession
-from logger import get_logger
+from movie_pipeline.utils import get_logger
 
 
 class LLMGenrePredictor:
@@ -53,11 +53,15 @@ class LLMGenrePredictor:
                 Number of movies to process in each batch.
             model_name : str
                 Name of the Ollama model to use for prediction.
+            spark : SparkSession
+                Spark session to use for creating DataFrames.
         '''
         self.batch_size = batch_size
         self.model_name = model_name
         self.spark = spark
         self.logger = get_logger(__name__)
+        # Create an Ollama client.
+        self.client = ollama.Client(host='http://localhost:11434')
 
     def predict_genres(self, df: 'DataFrame') -> 'DataFrame':
         '''
@@ -71,7 +75,7 @@ class LLMGenrePredictor:
             Returns:
             ----------
             DataFrame
-                A DataFrame containing movie data with predicted.
+                A DataFrame containing movie IDs and predicted genres.
         '''
         pdf = df.select(
             'tconst',
@@ -90,9 +94,15 @@ class LLMGenrePredictor:
             batch_results = self._process_batch(batch)
             results.extend(batch_results)
         genre_df = pd.DataFrame(results)
-        return spark.createDataFrame(genre_df)
+        # Use the provided Spark session or extract it from the DataFrame
+        if self.spark:
+            spark_session = self.spark
+        else:
+            # Fallback to extracting from DataFrame
+            spark_session = df._sc._jvm.org.apache.spark.sql.SparkSession.getActiveSession().get()
+        return spark_session.createDataFrame(genre_df)
 
-    def _process_batch(self: 'LLMGenrePredictor', batch):
+    def _process_batch(self: 'LLMGenrePredictor', batch: pd.DataFrame) -> list:
         '''
         Process a batch of movies through the LLM.
 
@@ -110,18 +120,15 @@ class LLMGenrePredictor:
         for _, movie in batch.iterrows():
             prompt = self._create_prompt(movie)
             try:
-                # Call Ollama API.
-                response = requests.post(
-                    'http://localhost:11434/api/generate',
-                    json={
-                        'model': self.model_name,
-                        'prompt': prompt,
-                        'stream': False
-                    }
-                ).json()
-                # Extract the LLM response.
+                # Use the Ollama client to generate a response.
+                response = self.client.generate(
+                    model=self.model_name,
+                    prompt=prompt,
+                    stream=False
+                )
+                # Extract the response text.
                 response_text = response['response']
-                # Parse the JSON from the response
+                # Parse the JSON from the response.
                 genre_data = self._parse_response(response_text, movie['tconst'])
                 results.append(genre_data)
             except Exception as e:
@@ -156,7 +163,7 @@ class LLMGenrePredictor:
     Predict ONE genre from this list:
     {", ".join(self.MOVIE_GENRES)}
 
-    Respond ONLY  with this valid JSON:
+    Respond ONLY with this valid JSON:
     {{
         "tconst": "{movie_data['tconst']}",
         "genre": "PREDICTED_GENRE"
@@ -181,7 +188,7 @@ class LLMGenrePredictor:
                 A dictionary containing tconst and genre.
         '''
         try:
-            # Extract JSON from the response (handles cases where model adds extra text)
+            # Extract JSON from the response (handles cases where model adds extra text).
             json_start = response.find('{')
             json_end = response.rfind('}') + 1
             if json_start >= 0 and json_end > json_start:
@@ -189,14 +196,14 @@ class LLMGenrePredictor:
                 data = json.loads(json_str)
                 # Validate the response format.
                 if 'tconst' in data and 'genre' in data:
-                    # Ensure genre is in our predefined list (case-insensitive)
+                    # Ensure genre is in our predefined list (case-insensitive).
                     genre = data['genre']
                     for valid_genre in self.MOVIE_GENRES:
                         if valid_genre.lower() == genre.lower():
                             return {'tconst': tconst, 'genre': valid_genre}
-                    # If genre not in predefined list, return as is
+                    # If genre not in predefined list, return as-is.
                     return {'tconst': tconst, 'genre': data['genre']}
-            # If we couldn't parse JSON or it doesn't have the right fields
+            # If we couldn't parse JSON or it doesn't have the right fields.
             self.logger.warning(f'Failed to parse response for movie {tconst}: {response[:100]}...')
             return {'tconst': tconst, 'genre': 'unknown'}
         except Exception as e:
