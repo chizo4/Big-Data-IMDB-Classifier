@@ -22,6 +22,7 @@ from datetime import datetime
 from logger import get_logger
 from pyspark.ml import Pipeline as SparkPipeline
 from pyspark.ml.classification import RandomForestClassifier
+from pyspark.ml.evaluation import MulticlassClassificationEvaluator
 from pyspark.ml.feature import VectorAssembler, StandardScaler
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, when, collect_list, concat_ws
@@ -45,7 +46,6 @@ class ClassifierPipeline:
     RESULT_FILE_BASE = r'{set_name}_prediction_{timestamp}.csv'
     # Standard cols to follow in data.
     NUMERIC_COLS = {'runtimeMinutes', 'numVotes', 'startYear', 'endYear'}
-    CATEGORICAL_COLS = {'primaryTitle', 'originalTitle', 'writers', 'directors'}
 
     def __init__(self: 'ClassifierPipeline') -> None:
         '''
@@ -76,9 +76,8 @@ class ClassifierPipeline:
         self.rf_classifier = RandomForestClassifier(
             featuresCol='scaled_features',
             labelCol='label',
-            numTrees=100,    # TODO: Number of trees in the forest.
-            # maxDepth=10,   # TODO: Depth of each tree (to prevent overfitting).
-            seed=42          # TODO: Random seed for reproducibility.
+            numTrees=100,
+            seed=42
         )
         self.scaler = StandardScaler(
             inputCol='features',
@@ -86,8 +85,8 @@ class ClassifierPipeline:
             withStd=True,
             withMean=False
         )
-        # Initialize feature cols that will be further extended.
-        self.feature_cols = self.NUMERIC_COLS
+        # Initialize feature cols that will be further extended. Skip endYear.
+        self.feature_cols = self.NUMERIC_COLS - {'endYear'}
 
     @staticmethod
     def set_args() -> argparse.Namespace:
@@ -168,7 +167,6 @@ class ClassifierPipeline:
         pred_filename = pred_filename.replace('{set_name}', set_name)
         pred_filename = pred_filename.replace('{timestamp}', curr_time)
         pred_path = f'{base_path}/{pred_filename}'
-        print(pred_path)
         return pred_path
 
     def load_data(self: 'ClassifierPipeline') -> None:
@@ -276,7 +274,7 @@ class ClassifierPipeline:
 
             PROCEDURE:
             (1) Merging metadata (directors, writers) to include relevant categorical features.
-            (2) For TRAIN: convert booleam string labels to binary numeric.
+            (2) For TRAIN: convert boolean string labels to binary numeric.
             (3) Handling categorical features via tokenizing+hashing and indexing.
             (4) Handling missing values.
             (5) Assemble features into single vector.
@@ -299,6 +297,10 @@ class ClassifierPipeline:
         df = self.merge_metadata_into_df(df)
         ClassifierPipeline.logger.info('Initial DataFrame after metadata merge:')
         df.show(10, False)
+        # (2) Drop endYear column due to high percentage of missing values (around 90%).
+        ClassifierPipeline.logger.info('Dropping "endYear" column...')
+        if 'endYear' in df.columns:
+            df = df.drop('endYear')
         # (2) For TRAIN: convert string labels to binary numeric, where: "True" -> 1, "False" -> 0.
         if train:
             ClassifierPipeline.logger.info('Converting boolean labels to binary for TRAIN...')
@@ -330,7 +332,8 @@ class ClassifierPipeline:
         df.show(10, False)
         return df
 
-    def train_model(self: 'ClassifierPipeline', df: 'DataFrame') -> 'PipelineModel':
+    # def train_model(self: 'ClassifierPipeline', df: 'DataFrame') -> 'PipelineModel':
+    def train_model(self: 'ClassifierPipeline', train_df: 'DataFrame') -> 'PipelineModel':
         '''
         Train the RandomForestClassifier model using the engineered features,
         and save it for further use.
@@ -345,12 +348,22 @@ class ClassifierPipeline:
             model : PipelineModel
                 The trained model.
         '''
+        train_df, val_df = train_df.randomSplit([0.8, 0.2], seed=42) #TEMP!
         # Set Spark ML Pipeline to encapsulate training steps.
         spark_pipeline = SparkPipeline(stages=[self.rf_classifier])
-        model = spark_pipeline.fit(df)
+        model = spark_pipeline.fit(train_df) #df
         # Save trained model.
         model.write().overwrite().save(self.model_path)
         ClassifierPipeline.logger.info(f'TRAINED RF model saved to: "{self.model_path}".')
+        # TEMP: some eval debugs
+        y_pred = model.transform(val_df)
+        evaluator = MulticlassClassificationEvaluator(
+            labelCol="label",
+            predictionCol="prediction",
+            metricName="accuracy"
+        )
+        accuracy = evaluator.evaluate(y_pred)
+        print("Model Accuracy:", accuracy)
         return model
 
     def __call__(self: 'ClassifierPipeline') -> None:
@@ -378,10 +391,10 @@ class ClassifierPipeline:
         ClassifierPipeline.logger.info('***(3) APPLYING FEATURE ENGINEERING...***')
         ClassifierPipeline.logger.info('***FE: TRAIN SET***')
         train_df = self.engineer_features(train_df, train=True)
-        ClassifierPipeline.logger.info('***FE: VAL SET***')
-        val_df = self.engineer_features(val_df)
-        ClassifierPipeline.logger.info('***FE: TEST SET***')
-        test_df = self.engineer_features(test_df)
+        # ClassifierPipeline.logger.info('***FE: VAL SET***')
+        # val_df = self.engineer_features(val_df)
+        # ClassifierPipeline.logger.info('***FE: TEST SET***')
+        # test_df = self.engineer_features(test_df)
         ClassifierPipeline.logger.info('***(3) FEATURE ENGINEERING: COMPLETE!***')
         # (4) Train the RF model.
         ClassifierPipeline.logger.info('***(4) TRAINING RANDOM FOREST CLASSIFIER...***')
