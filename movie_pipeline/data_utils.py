@@ -20,9 +20,11 @@ VERSION:
 import glob
 import json
 from logger import get_logger
+import os
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, when
-from pyspark.ml.feature import HashingTF, Tokenizer, StringIndexer
+from pyspark.sql.functions import col, when, row_number, desc
+from pyspark.ml.feature import StringIndexer
+from pyspark.sql.window import Window
 import pandas as pd
 import re
 import unicodedata
@@ -260,38 +262,6 @@ class DataUtils:
         return col_median_int
 
     @staticmethod
-    def tokenize_and_hash_col(df: 'DataFrame', col_name: str) -> tuple:
-        '''
-        Tokenize and hash data for a given text column. For instance, applied
-        per directors and writers metadata columns.
-
-            Parameters:
-            -----------
-            df : DataFrame
-                The input DataFrame to preprocess.
-            col_name : str
-                The name of the column to be processed.
-
-            Returns:
-            -----------
-            (df, output_col_name) : tuple
-                Tuple of the preprocessed DataFrame and the output column name.
-        '''
-        output_col_name = f'{col_name}_index'
-        tokenizer = Tokenizer(inputCol=col_name, outputCol=f'{col_name}_tokens')
-        df = tokenizer.transform(df)
-        # Apply hashing to reduce dimensionality.
-        hasher = HashingTF(
-            inputCol=f'{col_name}_tokens',
-            outputCol=output_col_name,
-            numFeatures=100
-        )
-        df = hasher.transform(df)
-        # Drop intermediate columns.
-        df = df.drop(f'{col_name}', f'{col_name}_tokens')
-        return (df, output_col_name)
-
-    @staticmethod
     def string_index_col(df: 'DataFrame', col_name: str) -> tuple:
         '''
         Apply string indexing to a given column.
@@ -315,3 +285,94 @@ class DataUtils:
         # Drop intermediate columns.
         df = df.drop(col_name)
         return (df, output_col_name)
+
+    @staticmethod
+    def count_entity(df: 'DataFrame', key_name: str) -> 'DataFrame':
+        '''
+        Count the number of occurences per metadata field,
+        e.g., directors, writers, etc.
+
+            Parameters:
+            -----------
+            df : DataFrame
+                The input DataFrame to preprocess.
+
+            Returns:
+            -----------
+            counted_df : DataFrame
+                The DataFrame with the counted metadata field.
+        '''
+        # Count occurrences of an entity.
+        entity_counts = df.groupBy(key_name).count()
+        # Join the counts back to the original data
+        counted_df = df.join(
+            entity_counts,
+            on=key_name,
+            how='left'
+        ).withColumnRenamed('count', f'{key_name}_count')
+        return counted_df
+
+    @staticmethod
+    def get_top_count_entity(df: 'DataFrame', key_name: str) -> 'DataFrame':
+        '''
+        Get the top count of an entity, e.g., director, writer, etc.
+
+            Parameters:
+            -----------
+            df : DataFrame
+                The input DataFrame to preprocess.
+
+            Returns:
+            -----------
+            entity_df : DataFrame
+                The DataFrame with the top count per entity.
+        '''
+        entity_window = Window.partitionBy('movie').orderBy(desc(key_name))
+        entity_ranked = df.withColumn('rank', row_number().over(entity_window))
+        entity_df = entity_ranked.filter(col('rank') == 1).drop('rank', key_name)
+        return entity_df
+
+    @staticmethod
+    def load_or_create_genre_predictions(spark: 'SparkSession', df: 'DataFrame', predictor: 'LLMGenrePredictor', cache_path: str) -> 'DataFrame':
+        '''
+        Load genre predictions from cache if available, or create new predictions using the provided predictor.
+        Handles incremental updates when new movies are found that don't exist in the cache.
+
+            Parameters:
+            -----------
+            spark : SparkSession
+                The active Spark session for loading and processing data.
+            df : DataFrame
+                The input DataFrame containing movie information.
+            predictor : LLMGenrePredictor
+                The predictor object that will generate genre predictions if needed.
+            cache_path : str
+                The path where genre predictions are cached as a Parquet file.
+
+            Returns:
+            -----------
+            genre_df : DataFrame
+                A DataFrame containing movie IDs (tconst) and their predicted genres.
+        '''
+        if os.path.exists(cache_path):
+            # Load from cache.
+            DataUtils.logger.info(f'Loading genre predictions from cache: "{cache_path}"')
+            genre_df = spark.read.parquet(cache_path)
+            # Check if any movies are missing from cache.
+            cached_ids = set([row['tconst'] for row in genre_df.select('tconst').collect()])
+            current_ids = set([row['tconst'] for row in df.select('tconst').collect()])
+            missing_ids = current_ids - cached_ids
+            if not missing_ids:
+                return genre_df
+            # Process only missing movies
+            missing_df = df.filter(df.tconst.isin(list(missing_ids)))
+            new_predictions = predictor.predict_genres(missing_df)
+            # Combine with existing cache.
+            genre_df = genre_df.union(new_predictions)
+        else:
+            # Create new predictions for all movies
+            DataUtils.logger.info(f'Creating new genre predictions for {df.count()} movies')
+            genre_df = predictor.predict_genres(df)
+        # Save updated cache.
+        genre_df.write.mode('overwrite').parquet(cache_path)
+        return genre_df

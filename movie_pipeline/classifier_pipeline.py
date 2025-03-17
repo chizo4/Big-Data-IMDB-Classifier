@@ -19,6 +19,7 @@ VERSION:
 import argparse
 from data_utils import DataUtils
 from datetime import datetime
+from llm_predictor import LLMGenrePredictor
 from logger import get_logger
 from pyspark.ml import Pipeline as SparkPipeline
 from pyspark.ml.classification import RandomForestClassifier
@@ -35,8 +36,10 @@ class ClassifierPipeline:
                          DataUtils and Classifier classes:
                          (1) Initial setups: CLI args, access data paths, etc.
                          (2) Loading data (from CSV/JSON).
-                         (3) Train the Random Forest Classifier model.
-                         (3) Evaluates and save predictions.
+                         (3) Pre-processing data (missing values, data types, etc.).
+                         (4) Feature engineering (metadata, genre predictions, etc.).
+                         (5) Train the Random Forest Classifier model.
+                         (6) Evaluates and save predictions.
     -------------------------
     '''
 
@@ -56,20 +59,8 @@ class ClassifierPipeline:
             'runtimeMinutes': None,
             'numVotes': None
         }
-        # Set up CLI args.
-        self.args = ClassifierPipeline.set_args()
-        # Extract and assign data paths for the task.
-        self.data_path = self.args.data
-        self.train_csv_path = f'{self.data_path}/train-*.csv'
-        self.val_csv_path = f'{self.data_path}/{self.args.val}'
-        self.test_csv_path = f'{self.data_path}/{self.args.test}'
-        self.directing_json_path = f'{self.data_path}/{self.args.directing}'
-        self.writing_json_path = f'{self.data_path}/{self.args.writing}'
-        # Set path for model storage.
-        self.model_path = self.args.model
-        # Initialize VAL and TEST results files.
-        self.val_pred_path = self.set_pred_file(set_name='val', base_path=self.args.results)
-        self.test_pred_path = self.set_pred_file(set_name='test', base_path=self.args.results)
+        # Initialize feature cols that will be further extended. Skip "endYear".
+        self.feature_cols = self.NUMERIC_COLS - {'endYear'}
         # Initialize Spark session.
         self.spark = SparkSession.builder.appName('MoviePipeline').getOrCreate()
         # Initialize RF classifier and scaler.
@@ -85,8 +76,12 @@ class ClassifierPipeline:
             withStd=True,
             withMean=False
         )
-        # Initialize feature cols that will be further extended. Skip endYear.
-        self.feature_cols = self.NUMERIC_COLS - {'endYear'}
+        # LLLM genre predictor setup.
+        self.genre_predictor_llm = LLMGenrePredictor(
+            batch_size=20,
+            model_name='gemma3:1b',
+            spark=self.spark
+        )
 
     @staticmethod
     def set_args() -> argparse.Namespace:
@@ -169,6 +164,24 @@ class ClassifierPipeline:
         pred_path = f'{base_path}/{pred_filename}'
         return pred_path
 
+    def set_files(self: 'ClassifierPipeline') -> None:
+        '''
+        Set the file paths for the data, model, and results.
+        '''
+        # Extract and assign data paths for the task.
+        self.data_path = self.args.data
+        self.cache_path = f'{self.data_path}/genre_predictions.parquet'
+        self.train_csv_path = f'{self.data_path}/train-*.csv'
+        self.val_csv_path = f'{self.data_path}/{self.args.val}'
+        self.test_csv_path = f'{self.data_path}/{self.args.test}'
+        self.directing_json_path = f'{self.data_path}/{self.args.directing}'
+        self.writing_json_path = f'{self.data_path}/{self.args.writing}'
+        # Set path for model storage.
+        self.model_path = self.args.model
+        # Initialize VAL and TEST results files.
+        self.val_pred_path = self.set_pred_file(set_name='val', base_path=self.args.results)
+        self.test_pred_path = self.set_pred_file(set_name='test', base_path=self.args.results)
+
     def load_data(self: 'ClassifierPipeline') -> None:
         '''
         Load data from CSV and JSON files into Spark DataFrames
@@ -239,7 +252,8 @@ class ClassifierPipeline:
 
     def merge_metadata_into_df(self: 'ClassifierPipeline', df: 'DataFrame') -> 'DataFrame':
         '''
-        Merge movie metadata - wrting and directing - into main DataFrame.
+        Merge movie metadata - writing and directing - into main DataFrame.
+        For movies with multiple writers/directors, select the one with highest occurrence.
 
             Parameters:
             -----------
@@ -251,21 +265,43 @@ class ClassifierPipeline:
             df : DataFrame
                 DataFrame including directing and writing metadata.
         '''
-        # Join movie dataset with writing and directing metadata. Some movies have
-        # multiple writers and/or directors, thus we need to first aggregate them.
-        writing_df = self.data_dict['writing'].groupBy('movie') \
-            .agg(collect_list('writer').alias('writers_array')) \
-            .withColumn('writers', concat_ws(',', 'writers_array')) \
-            .drop('writers_array')
-        directing_df = self.data_dict['directing'].groupBy('movie') \
-            .agg(collect_list('director').alias('directors_array')) \
-            .withColumn('directors', concat_ws(',', 'directors_array')) \
-            .drop('directors_array')
+        ClassifierPipeline.logger.info('Assigning most frequent writer/director per movie...')
+        # Count occurrences of each writer and director across all movies.
+        writing_df = DataUtils.count_entity(df=self.data_dict['writing'], key_name='writer')
+        directing_df = DataUtils.count_entity(df=self.data_dict['directing'], key_name='director')
+        # For each movie, select the writer/director with the highest count.
+        writing_df = DataUtils.get_top_count_entity(df=writing_df, key_name='writer_count')
+        directing_df = DataUtils.get_top_count_entity(df=directing_df, key_name='director_count')
+        # Join the selected writer/director for each movie to the main dataset.
         df = df.join(writing_df, df['tconst'] == writing_df['movie'], how='left').drop('movie')
         df = df.join(directing_df, df['tconst'] == directing_df['movie'], how='left').drop('movie')
-        # Handle NULL cols for writers and directors.
-        df = df.withColumn('writers', when(col('writers').isNull(), 'unknown').otherwise(col('writers')))
-        df = df.withColumn('directors', when(col('directors').isNull(), 'unknown').otherwise(col('directors')))
+        # Handle NULL cols for writers and directors
+        df = df.withColumn('writer', when(col('writer').isNull(), 'unknown').otherwise(col('writer')))
+        df = df.withColumn('director', when(col('director').isNull(), 'unknown').otherwise(col('director')))
+        return df
+
+    def predict_genres_llm(self, df: 'DataFrame') -> 'DataFrame':
+        '''
+        Predict movie genres using LLM and add them to the DataFrame.
+
+            Parameters:
+            -----------
+            df : DataFrame
+                The main DataFrame to predict genres for.
+
+            Returns:
+            -----------
+            df : DataFrame
+                The main DataFrame with added genre predictions.
+        '''
+        # Get genre predictions (from cache or by generating new ones).
+        genre_df = DataUtils.load_or_create_genre_predictions(
+            self.spark, df, self.genre_predictor_llm, self.cache_path
+        )
+        # Join the predictions with the main dataframe.
+        df = df.join(genre_df, on='tconst', how='left')
+        # Handle missing genres.
+        df = df.withColumn('genre', when(col('genre').isNull(), 'unknown').otherwise(col('genre')))
         return df
 
     def engineer_features(self: 'ClassifierPipeline', df: 'DataFrame', train:bool=False) -> 'DataFrame':
@@ -275,10 +311,11 @@ class ClassifierPipeline:
             PROCEDURE:
             (1) Merging metadata (directors, writers) to include relevant categorical features.
             (2) For TRAIN: convert boolean string labels to binary numeric.
-            (3) Handling categorical features via tokenizing+hashing and indexing.
-            (4) Handling missing values.
-            (5) Assemble features into single vector.
-            (6) Standardize numeric features.
+            (3) Utilize LLM to create new synthetic feature: "genre".
+            (4) Handling categorical features via string indexing.
+            (5) Handling missing values.
+            (6) Assemble features into single vector.
+            (7) Standardize numeric features.
 
             Parameters:
             -----------
@@ -301,30 +338,26 @@ class ClassifierPipeline:
         ClassifierPipeline.logger.info('Dropping "endYear" column...')
         if 'endYear' in df.columns:
             df = df.drop('endYear')
-        # (2) For TRAIN: convert string labels to binary numeric, where: "True" -> 1, "False" -> 0.
+        # (2) For TRAIN: convert string labels to binary numeric, where: "True" -> 1.0, "False" -> 0.0.
         if train:
-            ClassifierPipeline.logger.info('Converting boolean labels to binary for TRAIN...')
+            ClassifierPipeline.logger.info('Converting boolean "label" field to binary for TRAIN...')
             df = df.withColumn('label', col('label').cast('double'))
-        # (3) Handle categorical variables.
-        # For "writers" and "directors": use tokenization and hashing for better handling.
-        ClassifierPipeline.logger.info('Tokenizing and hashing metadata for directors and writers...')
-        for col_name in ['writers', 'directors']:
-            # Tokenize and hash the current column and add it to the feature set.
-            df, output_col_name = DataUtils.tokenize_and_hash_col(df, col_name)
-            self.feature_cols.add(output_col_name)
-        # For text titles: apply standard StringIndexer.
-        ClassifierPipeline.logger.info('String indexing titles...')
-        for col_name in ['primaryTitle', 'originalTitle']:
+        # (3) Apply LLM to introduce new synthetic feature: "genre".
+        ClassifierPipeline.logger.info('Generating synthetic genre features via LLM...')
+        df = self.predict_genres_llm(df)
+        # (4) Handle categorical variables (metadata, genre) by applying StringIndexer.
+        ClassifierPipeline.logger.info('String indexing categorical features...')
+        for col_name in ['writer', 'director', 'genre']:
             df, output_col_name = DataUtils.string_index_col(df, col_name)
             self.feature_cols.add(output_col_name)
         ClassifierPipeline.logger.info(f'Feature column names: {self.feature_cols}')
-        # (4) Handle missing values.
+        # (5) Handle missing values.
         df = df.fillna(0)
-        # (5) Assemble all feature columns into a single vector
+        # (6) Assemble all feature columns into a single vector.
         ClassifierPipeline.logger.info('Assembling features into a single vector...')
         assembler = VectorAssembler(inputCols=list(self.feature_cols), outputCol='features')
         df = assembler.transform(df)
-        # (6) Standardize numeric features.
+        # (7) Standardize numeric features.
         ClassifierPipeline.logger.info('Standardizing numerical features')
         scaler_model = self.scaler.fit(df)
         df = scaler_model.transform(df)
@@ -377,6 +410,9 @@ class ClassifierPipeline:
             (4) Train RF classifier model.
             (5) Predict via trained model and save outputs.
         '''
+        # (0) Process CLI args.
+        self.args = ClassifierPipeline.set_args()
+        self.set_files()
         # (1) Load data.
         ClassifierPipeline.logger.info('***(1) LOADING DATA...***')
         self.load_data()
@@ -390,7 +426,7 @@ class ClassifierPipeline:
         # (3) Apply feature engineering procedures.
         ClassifierPipeline.logger.info('***(3) APPLYING FEATURE ENGINEERING...***')
         ClassifierPipeline.logger.info('***FE: TRAIN SET***')
-        train_df = self.engineer_features(train_df, train=True)
+        # train_df = self.engineer_features(train_df, train=True)
         # ClassifierPipeline.logger.info('***FE: VAL SET***')
         # val_df = self.engineer_features(val_df)
         # ClassifierPipeline.logger.info('***FE: TEST SET***')
@@ -398,7 +434,7 @@ class ClassifierPipeline:
         ClassifierPipeline.logger.info('***(3) FEATURE ENGINEERING: COMPLETE!***')
         # (4) Train the RF model.
         ClassifierPipeline.logger.info('***(4) TRAINING RANDOM FOREST CLASSIFIER...***')
-        rf_model = self.train_model(train_df)
+        # rf_model = self.train_model(train_df)
         ClassifierPipeline.logger.info('***(4) MODEL TRAINING: COMPLETE!***')
 
 
