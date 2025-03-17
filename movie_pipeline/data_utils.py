@@ -1,7 +1,7 @@
 '''
 --------------------------------------------------------------
 FILE:
-    movie-pipeline/data_utils.py
+    movie_pipeline/data_utils.py
 
 INFO:
     Utily class for data implementing atomic tools associated with

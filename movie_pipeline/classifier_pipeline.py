@@ -1,11 +1,11 @@
 '''
 --------------------------------------------------------------
 FILE:
-    movie-pipeline/pipeline.py
+    movie_pipeline/classifier_pipeline.py
 
 INFO:
-    Main pipeline file orchestrating the full-pipeline workflow.
-    From data loading to model predictions.
+    Main pipeline file orchestrating the full classifier pipeline
+    workflow. From data loading to model predictions.
 
 AUTHOR:
     @chizo4 (Filip J. Cierkosz)
@@ -20,20 +20,22 @@ import argparse
 from data_utils import DataUtils
 from datetime import datetime
 from logger import get_logger
+from pyspark.ml import Pipeline as SparkPipeline
+from pyspark.ml.classification import RandomForestClassifier
 from pyspark.ml.feature import StringIndexer, VectorAssembler
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, when, collect_list, concat_ws
 
 
-class Pipeline:
+class ClassifierPipeline:
     '''
     -------------------------
-    Pipeline - Main class orchestrating the overall workflow, utilizing DataUtils
-               and Classifier classes:
-               (1) Initial setups: CLI args, access data paths, etc.
-               (2) Loading data (from CSV/JSON).
-               (3) Process and train the model with Classifier.
-               (3) Evaluates and save predictions.
+    ClassifierPipeline - Main class orchestrating the overall workflow, utilizing
+                         DataUtils and Classifier classes:
+                         (1) Initial setups: CLI args, access data paths, etc.
+                         (2) Loading data (from CSV/JSON).
+                         (3) Process and train the model with Classifier.
+                         (3) Evaluates and save predictions.
     -------------------------
     '''
 
@@ -41,13 +43,15 @@ class Pipeline:
     logger = get_logger(__name__)
     # Base path for results to be customized for the task-specific data.
     RESULT_BASE_PATH = r'results/{data_path}/{set_name}_prediction_{timestamp}.csv'
+    # Base path for trained model.
+    MODEL_BASE_PATH = r'models/{data_path}/'
     # Standard cols to follow in data.
     NUMERIC_COLS = ['runtimeMinutes', 'numVotes', 'startYear', 'endYear']
     FEATURE_COLS = ['runtimeMinutes', 'numVotes', 'startYear', 'endYear', 'writers_index', 'directors_index']
 
-    def __init__(self: 'Pipeline') -> None:
+    def __init__(self: 'ClassifierPipeline') -> None:
         '''
-        Initialize the Pipeline class.
+        Initialize the ClassifierPipeline class.
         '''
         self.data_dict = {}
         self.median_dict = {
@@ -55,9 +59,10 @@ class Pipeline:
             'numVotes': None
         }
         # Set up CLI args.
-        self.args = Pipeline.set_args()
+        self.args = ClassifierPipeline.set_args()
         # Extract and assign data paths for the task.
         self.data_path = self.args.data
+        self.model_path = ClassifierPipeline.MODEL_BASE_PATH.replace('{data_path}', self.data_path)
         self.train_csv_path = f'{self.data_path}/train-*.csv'
         self.val_csv_path = f'{self.data_path}/{self.args.val}'
         self.test_csv_path = f'{self.data_path}/{self.args.test}'
@@ -68,6 +73,14 @@ class Pipeline:
         self.test_pred_path = self.set_pred_file(set_name='test', data_path=  self.data_path)
         # Initialize Spark session.
         self.spark = SparkSession.builder.appName('MoviePipeline').getOrCreate()
+        # Initialize RF classifier.
+        self.rf_classifier = RandomForestClassifier(
+            featuresCol='features',
+            labelCol='label',
+            numTrees=100,  # TODO: Number of trees in the forest.
+            maxDepth=10,   # TODO: Depth of each tree (to prevent overfitting).
+            seed=42        # TODO: Random seed for reproducibility.
+        )
 
     @staticmethod
     def set_args() -> argparse.Namespace:
@@ -131,13 +144,13 @@ class Pipeline:
                 Customized path name to the prediction file.
         '''
         curr_time = datetime.now().strftime('%Y%m%d_%H%M%S')
-        pred_path = Pipeline.RESULT_BASE_PATH
+        pred_path = ClassifierPipeline.RESULT_BASE_PATH
         pred_path = pred_path.replace('{data_path}', data_path)
         pred_path = pred_path.replace('{set_name}', set_name)
         pred_path = pred_path.replace('{timestamp}', curr_time)
         return pred_path
 
-    def load_data(self: 'Pipeline') -> None:
+    def load_data(self: 'ClassifierPipeline') -> None:
         '''
         Load data from CSV and JSON files into Spark DataFrames
         to build a full-data dictionary.
@@ -159,7 +172,7 @@ class Pipeline:
             'writing': writing_df
         }
 
-    def preprocess(self: 'Pipeline', df: 'DataFrame', train: bool=False) -> 'DataFrame':
+    def preprocess(self: 'ClassifierPipeline', df: 'DataFrame', train: bool=False) -> 'DataFrame':
         '''
         Preprocess the data by handling missing values, fixing data types,
         normalizing text fields, handling outliers, etc. Utilizes various
@@ -203,7 +216,7 @@ class Pipeline:
         df = DataUtils.normalize_text_cols(df)
         return df
 
-    def engineer_features(self: 'Pipeline', df: 'DataFrame') -> 'DataFrame':
+    def engineer_features(self: 'ClassifierPipeline', df: 'DataFrame') -> 'DataFrame':
         '''
         Apply feature engineering to the DataFrame, handling metadata.
 
@@ -249,7 +262,30 @@ class Pipeline:
         df = df.drop('writers', 'directors')
         return df
 
-    def __call__(self: 'Pipeline') -> None:
+    def train_model(self: 'ClassifierPipeline', df: 'DataFrame') -> 'PipelineModel':
+        '''
+        Train the RandomForestClassifier model using the engineered features,
+        and save it for further use.
+
+            Parameters:
+            -----------
+            df : DataFrame
+                The preprocessed and feature-engineered DataFrame for training.
+
+            Returns:
+            -----------
+            model : PipelineModel
+                The trained model.
+        '''
+        # Set Spark ML Pipeline to encapsulate training steps.
+        spark_pipeline = SparkPipeline(stages=[self.rf_classifier])
+        model = spark_pipeline.fit(df)
+        # Save trained model.
+        model.write().overwrite().save(self.model_path)
+        ClassifierPipeline.logger.info(f'TRAINED MODEL SAVED TO: "{self.model_path}".')
+        return model
+
+    def __call__(self: 'ClassifierPipeline') -> None:
         '''
         Main method to call the pipeline functionalities.
 
@@ -261,23 +297,27 @@ class Pipeline:
             (5) TODO: Predict via model.
         '''
         # (1) Load data.
-        Pipeline.logger.info('LOADING DATA...')
+        ClassifierPipeline.logger.info('LOADING DATA...')
         self.load_data()
-        Pipeline.logger.info('DATA: LOADED!')
+        ClassifierPipeline.logger.info('DATA: LOADED!')
         # (2) Pre-process data: TRAIN, VAL, TEST.
-        Pipeline.logger.info('PRE-PROCESSING DATA...')
+        ClassifierPipeline.logger.info('PRE-PROCESSING DATA...')
         train_df = self.preprocess(self.data_dict['train'], train=True)
-        # val_df = self.preprocess(self.data_dict['val'])
-        # test_df = self.preprocess(self.data_dict['test'])
-        Pipeline.logger.info('DATA PRE-PROCESSING: COMPLETE!')
+        val_df = self.preprocess(self.data_dict['val'])
+        test_df = self.preprocess(self.data_dict['test'])
+        ClassifierPipeline.logger.info('DATA PRE-PROCESSING: COMPLETE!')
         # (3) Apply feature engineering procedures.
-        Pipeline.logger.info('APPLYING FEATURE ENGINEERING...')
+        ClassifierPipeline.logger.info('APPLYING FEATURE ENGINEERING...')
         train_df = self.engineer_features(train_df)
-        # val_df = self.engineer_features(val_df)
-        # test_df = self.engineer_features(test_df)
-        Pipeline.logger.info('FEATURE ENGINEERING: COMPLETE!')
+        val_df = self.engineer_features(val_df)
+        test_df = self.engineer_features(test_df)
+        ClassifierPipeline.logger.info('FEATURE ENGINEERING: COMPLETE!')
+        # (4) TODO: Train the model.
+        # ClassifierPipeline.logger.info('TRAINING RANDOM FORREST MODEL...')
+        # rf_model = self.train_model(train_df)
+        # ClassifierPipeline.logger.info('MODEL TRAINING: COMPLETE!')
 
 
 if __name__ == '__main__':
-    pipe = Pipeline()
-    pipe()
+    classifier_pipe = ClassifierPipeline()
+    classifier_pipe()

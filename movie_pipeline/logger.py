@@ -1,7 +1,7 @@
 '''
 --------------------------------------------------------------
 FILE:
-    movie-pipeline/logger.py
+    movie_pipeline/logger.py
 
 INFO:
     Logger configuration for Spark debugs, since normal print()

@@ -58,7 +58,13 @@ done
 RESULTS_DIR="results/$DATA_PATH"
 if [ ! -d "$RESULTS_DIR" ]; then
     mkdir -p "$RESULTS_DIR"
-    echo "INFO: Created results directory: $RESULTS_DIR"; echo
+    echo "INFO: Created RESULTS directory: $RESULTS_DIR"; echo
+fi
+# (D) Model directory.
+MODEL_DIR="model/$DATA_PATH"
+if [ ! -d "$MODEL_DIR" ]; then
+    mkdir -p "$MODEL_DIR"
+    echo "INFO: Created MODEL directory: $MODEL_DIR"; echo
 fi
 
 echo "PIPELINE: Initial setup verified. Proceeding with pipeline..."; echo
@@ -72,7 +78,7 @@ eval "$(conda shell.bash hook)"
 conda activate $ENV_NAME
 
 # STEP 4: Run the pipeline.
-python movie-pipeline/pipeline.py \
+python movie_pipeline/classifier_pipeline.py \
     --data "$DATA_PATH" \
     --val "$VAL_CSV" \
     --test "$TEST_CSV" \
