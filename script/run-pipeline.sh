@@ -83,4 +83,6 @@ python movie_pipeline/classifier_pipeline.py \
     --val "$VAL_CSV" \
     --test "$TEST_CSV" \
     --directing "$DIRECT_JSON" \
-    --writing "$WRITE_JSON"
+    --writing "$WRITE_JSON" \
+    --model "$MODEL_DIR" \
+    --results "$RESULTS_DIR"
