@@ -22,6 +22,7 @@ import json
 from logger import get_logger
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, when
+from pyspark.ml.feature import HashingTF, Tokenizer, StringIndexer
 import pandas as pd
 import re
 import unicodedata
@@ -55,6 +56,7 @@ class DataUtils:
             -----------
             spark.DataFrame : The loaded Spark DataFrame.
         '''
+        DataUtils.logger.info(f'Loading from: "{json_path}".')
         return spark.read.json(json_path)
 
     @staticmethod
@@ -109,6 +111,7 @@ class DataUtils:
             -----------
             spark.DataFrame : The loaded Spark DataFrame.
         '''
+        DataUtils.logger.info(f'Loading from: "{csv_path}".')
         return spark.read.option('header', True).option('inferSchema', True).csv(csv_path)
 
     @staticmethod
@@ -255,3 +258,60 @@ class DataUtils:
         col_median_int = int(df.approxQuantile(col_name, [0.5], 0.0)[0])
         DataUtils.logger.info(f'Median: {col_name} = {col_median_int}')
         return col_median_int
+
+    @staticmethod
+    def tokenize_and_hash_col(df: 'DataFrame', col_name: str) -> tuple:
+        '''
+        Tokenize and hash data for a given text column. For instance, applied
+        per directors and writers metadata columns.
+
+            Parameters:
+            -----------
+            df : DataFrame
+                The input DataFrame to preprocess.
+            col_name : str
+                The name of the column to be processed.
+
+            Returns:
+            -----------
+            (df, output_col_name) : tuple
+                Tuple of the preprocessed DataFrame and the output column name.
+        '''
+        output_col_name = f'{col_name}_index'
+        tokenizer = Tokenizer(inputCol=col_name, outputCol=f'{col_name}_tokens')
+        df = tokenizer.transform(df)
+        # Apply hashing to reduce dimensionality.
+        hasher = HashingTF(
+            inputCol=f'{col_name}_tokens',
+            outputCol=output_col_name,
+            numFeatures=100
+        )
+        df = hasher.transform(df)
+        # Drop intermediate columns.
+        df = df.drop(f'{col_name}', f'{col_name}_tokens')
+        return (df, output_col_name)
+
+    @staticmethod
+    def string_index_col(df: 'DataFrame', col_name: str) -> tuple:
+        '''
+        Apply string indexing to a given column.
+
+            Parameters:
+            -----------
+            df : DataFrame
+                The input DataFrame to preprocess.
+            col_name : str
+                The name of the column to be processed.
+
+            Returns:
+            -----------
+            (df, output_col_name) : tuple
+                Tuple of the preprocessed DataFrame and the output column name.
+        '''
+        output_col_name = f'{col_name}_index'
+        # Apply string indexing.
+        indexer = StringIndexer(inputCol=col_name, outputCol=output_col_name).setHandleInvalid('keep')
+        df = indexer.fit(df).transform(df)
+        # Drop intermediate columns.
+        df = df.drop(col_name)
+        return (df, output_col_name)
