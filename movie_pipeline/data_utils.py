@@ -109,7 +109,7 @@ class DataUtils:
             -----------
             spark.DataFrame : The loaded Spark DataFrame.
         '''
-        return spark.read.option('header', True).csv(csv_path)
+        return spark.read.option('header', True).option('inferSchema', True).csv(csv_path)
 
     @staticmethod
     def load_train_csv(spark: SparkSession, train_path_pattern: str) -> 'DataFrame':
@@ -134,7 +134,7 @@ class DataUtils:
             DataUtils.logger.info(f'ERROR: No TRAIN files found matching pattern "{train_path_pattern}".')
             raise ValueError(f'ERROR: No TRAIN files found matching pattern "{train_path_pattern}".')
         train_files.sort()
-        DataUtils.logger.info(f'Found {len(train_files)} training files:\n{train_files}')
+        DataUtils.logger.info(f'Found {len(train_files)} TRAIN files:\n{train_files}')
         # Load and union all train data files.
         train_df = None
         for file in train_files:
@@ -145,7 +145,7 @@ class DataUtils:
                 train_df = train_df.union(current_df)
         # Debug train data details.
         DataUtils.logger.info(f'Training data count: {train_df.count()}.')
-        DataUtils.logger.info('Training Data Schema:')
+        DataUtils.logger.info('TRAIN DATA SCHEMA:')
         train_df.printSchema()
         return train_df
 
