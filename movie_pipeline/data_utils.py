@@ -17,6 +17,7 @@ VERSION:
 '''
 
 
+import csv
 import glob
 import json
 from logger import get_logger
@@ -27,7 +28,6 @@ from pyspark.ml.feature import StringIndexer
 from pyspark.sql.window import Window
 import pandas as pd
 import re
-import shutil
 import unicodedata
 
 
@@ -334,10 +334,15 @@ class DataUtils:
         return entity_df
 
     @staticmethod
-    def load_or_create_genre_predictions(spark: 'SparkSession', df: 'DataFrame', predictor: 'LLMGenrePredictor', cache_path: str) -> 'DataFrame':
+    def load_or_create_genre_predictions(
+        spark: 'SparkSession',
+        df: 'DataFrame',
+        predictor: 'LLMGenrePredictor',
+        csv_cache_path: str
+    ) -> 'DataFrame':
         '''
-        Load genre predictions from cache if available, or create new predictions using the provided predictor.
-        Handles incremental updates when new movies are found that don't exist in the cache.
+        Load genre predictions from a simple CSV cache if available, or generate new predictions.
+        Uses a lightweight approach that minimizes memory usage and processing overhead.
 
             Parameters:
             -----------
@@ -347,52 +352,56 @@ class DataUtils:
                 The input DataFrame containing movie information.
             predictor : LLMGenrePredictor
                 The predictor object that will generate genre predictions if needed.
-            cache_path : str
-                The path where genre predictions are cached as a Parquet file.
+            csv_cache_path : str
+                The CSV path for caching predictions.
 
             Returns:
             -----------
             genre_df : DataFrame
                 A DataFrame containing movie IDs (tconst) and their predicted genres.
         '''
-        if os.path.exists(cache_path):
-            # Load from cache.
-            DataUtils.logger.info(f'Loading genre predictions from cache: "{cache_path}"')
+        predictions = {}
+        # Extract the tconst values we need to predict.
+        current_ids = set([row['tconst'] for row in df.select('tconst').collect()])
+        DataUtils.logger.info(f'Need predictions for {len(current_ids)} movies')
+        # Load existing predictions from cache.
+        if os.path.exists(csv_cache_path):
+            DataUtils.logger.info(f'Loading genre cache from: "{csv_cache_path}".')
             try:
-                genre_df = spark.read.parquet(cache_path)
-                _ = genre_df.count()
-                # Ensure desired columns.
-                if 'tconst' not in genre_df.columns or 'genre' not in genre_df.columns:
-                    raise ValueError('Cache file is missing required columns.')
-                DataUtils.logger.info(f'Successfully loaded {genre_df.count()} genre predictions from cache.')
-                # Check if any movies are missing from cache?
-                cached_ids = set([row['tconst'] for row in genre_df.select('tconst').collect()])
-                current_ids = set([row['tconst'] for row in df.select('tconst').collect()])
-                missing_ids = current_ids - cached_ids
-                if not missing_ids:
-                    return genre_df
-                # Process only missing movies.
-                DataUtils.logger.info(f'Generating predictions for {len(missing_ids)} new movies not in cache.')
-                missing_df = df.filter(df.tconst.isin(list(missing_ids)))
-                new_predictions = predictor.predict_genres(missing_df)
-                # Combine with existing cache.
-                genre_df = genre_df.union(new_predictions)
+                # Read the CSV directly with Python. More efficient in this case.
+                with open(csv_cache_path, 'r') as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        predictions[row['tconst']] = row['genre']
+                DataUtils.logger.info(f'Loaded {len(predictions)} cached predictions.')
             except Exception as e:
-                DataUtils.logger.error(f'Error loading cache: {str(e)}')
-                # Delete corrupted cache.
-                if os.path.isdir(cache_path):
-                    shutil.rmtree(cache_path)
-                elif os.path.isfile(cache_path):
-                    os.remove(cache_path)
-                DataUtils.logger.info(f"Removed corrupted cache at: {cache_path}")
-                # Create new predictions for all movies
-                DataUtils.logger.info(f'Creating new genre predictions for {df.count()} movies')
-                genre_df = predictor.predict_genres(df)
-        else:
-            # Create new predictions for all movies.
-            DataUtils.logger.info(f'Creating new genre predictions for {df.count()} movies')
-            genre_df = predictor.predict_genres(df)
-        # Save updated cache.
-        genre_df.write.mode('overwrite').parquet(cache_path)
-        DataUtils.logger.info(f'Saved {genre_df.count()} genre predictions to cache')
+                DataUtils.logger.error(f'Error reading cache: {str(e)}')
+                DataUtils.logger.info('Will generate new predictions')
+                predictions = {}
+        # Find which movies need predictions.
+        missing_ids = current_ids - set(predictions.keys())
+        # Generate predictions for missing movies.
+        if missing_ids:
+            DataUtils.logger.info(f'Generating predictions for {len(missing_ids)} new movies.')
+            missing_df = df.filter(df.tconst.isin(list(missing_ids)))
+            new_predictions_df = predictor.predict_genres(missing_df)
+            # Extract new predictions.
+            for row in new_predictions_df.collect():
+                try:
+                    predictions[row['tconst']] = row['genre']
+                except (KeyError, IndexError):
+                    predictions[row['tconst']] = 'unknown'
+            # Save updated cache.
+            try:
+                DataUtils.logger.info(f'Saving updated cache to {csv_cache_path}')
+                with open(csv_cache_path, 'w', newline='') as f:
+                    writer = csv.DictWriter(f, fieldnames=['tconst', 'genre'])
+                    writer.writeheader()
+                    for tconst, genre in predictions.items():
+                        writer.writerow({'tconst': tconst, 'genre': genre})
+            except Exception as e:
+                DataUtils.logger.error(f'Error saving cache: {str(e)}')
+        result_rows = [{'tconst': tconst, 'genre': genre} for tconst, genre in predictions.items()
+                    if tconst in current_ids]
+        genre_df = spark.createDataFrame(result_rows)
         return genre_df
