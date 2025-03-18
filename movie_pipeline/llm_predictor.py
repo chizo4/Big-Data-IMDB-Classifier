@@ -15,11 +15,10 @@ VERSION:
 '''
 
 
-import json
 import pandas as pd
 import ollama
 from pyspark.sql import DataFrame, SparkSession
-from movie_pipeline.utils import get_logger
+from logger import get_logger
 
 
 class LLMGenrePredictor:
@@ -151,24 +150,18 @@ class LLMGenrePredictor:
             str
                 A structured prompt for genre prediction.
         '''
-        prompt = f'''
-    You are an IMDB expert. Given this movie data:
+        prompt = f'''You are an IMDB expert. Given this movie data:
 
-    - Title: {movie_data['primaryTitle']}
-    - Original Title: {movie_data['originalTitle']}
-    - Year: {movie_data['startYear']}
-    - Runtime: {movie_data['runtimeMinutes']} min
-    - Votes: {movie_data['numVotes']}
+        - Title: {movie_data['primaryTitle']}
+        - Original Title: {movie_data['originalTitle']}
+        - Year: {movie_data['startYear']}
+        - Runtime: {movie_data['runtimeMinutes']} min
+        - Votes: {movie_data['numVotes']}
 
-    Predict ONE genre from this list:
-    {", ".join(self.MOVIE_GENRES)}
+        Predict ONE genre from this list:
+        {", ".join(self.MOVIE_GENRES)}
 
-    Respond ONLY with this valid JSON:
-    {{
-        "tconst": "{movie_data['tconst']}",
-        "genre": "PREDICTED_GENRE"
-    }}
-    '''
+        Respond ONLY with the genre name.'''
         return prompt
 
     def _parse_response(self: 'LLMGenrePredictor', response: str, tconst: str) -> dict:
@@ -188,23 +181,14 @@ class LLMGenrePredictor:
                 A dictionary containing tconst and genre.
         '''
         try:
-            # Extract JSON from the response (handles cases where model adds extra text).
-            json_start = response.find('{')
-            json_end = response.rfind('}') + 1
-            if json_start >= 0 and json_end > json_start:
-                json_str = response[json_start:json_end]
-                data = json.loads(json_str)
-                # Validate the response format.
-                if 'tconst' in data and 'genre' in data:
-                    # Ensure genre is in our predefined list (case-insensitive).
-                    genre = data['genre']
-                    for valid_genre in self.MOVIE_GENRES:
-                        if valid_genre.lower() == genre.lower():
-                            return {'tconst': tconst, 'genre': valid_genre}
-                    # If genre not in predefined list, return as-is.
-                    return {'tconst': tconst, 'genre': data['genre']}
-            # If we couldn't parse JSON or it doesn't have the right fields.
-            self.logger.warning(f'Failed to parse response for movie {tconst}: {response[:100]}...')
+            # Strip whitespace and any quotes.
+            genre = response.strip().strip('"\'')
+            # Check if genre is in our predefined list (case-insensitive).
+            for valid_genre in self.MOVIE_GENRES:
+                if valid_genre.lower() == genre.lower():
+                    return {'tconst': tconst, 'genre': valid_genre}
+            # If the response doesn't match any valid genre.
+            self.logger.warning(f'Unexpected genre "{genre}" for movie {tconst}')
             return {'tconst': tconst, 'genre': 'unknown'}
         except Exception as e:
             self.logger.error(f'Error parsing response for movie {tconst}: {str(e)}')
