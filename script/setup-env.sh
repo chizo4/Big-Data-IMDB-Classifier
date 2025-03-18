@@ -6,6 +6,9 @@
 # INFO:
 # The script sets up the environment for the full-experiment pipeline for
 # the movie classification project.
+#
+# USAGE:
+# bash script/setup-env.sh
 
 ########################### CONFIGURATION & SETUP ###########################
 
