@@ -16,7 +16,7 @@
 # bash script/run-predict.sh [data_path] [direct_json] [write_json] [test_csv] [model]
 #
 # EXAMPLE (for the task of "IMDB" on TEST data):
-# bash script/run-predict.sh imdb directing.json writing.json test_hidden.csv gemma3:1b
+# bash script/run-predict.sh imdb directing.json writing.json test_hidden.csv gemma3:4b
 #
 # OPTIONS:
 # [data_path]   -> Base path to access the directory with movie data.

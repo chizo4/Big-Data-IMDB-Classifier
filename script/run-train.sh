@@ -16,7 +16,7 @@
 # bash script/run-train.sh [data_path] [direct_json] [write_json] [model]
 #
 # EXAMPLE (for the task of "IMDB"):
-# bash script/run-train.sh imdb directing.json writing.json gemma3:1b
+# bash script/run-train.sh imdb directing.json writing.json gemma3:4b
 #
 # OPTIONS:
 # [data_path]   -> Base path to access the directory with movie data.
