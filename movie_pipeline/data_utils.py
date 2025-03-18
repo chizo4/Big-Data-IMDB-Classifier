@@ -7,6 +7,7 @@ INFO:
     Utily class for data implementing atomic tools associated with
     loading data from CSV and JSON files into Spark DataFrames,
     pre-processing sub-steps, or feature engineering.
+    Implemented to avoid making ClassifierPipeline too bulky.
 
 AUTHOR:
     @chizo4 (Filip J. Cierkosz)

@@ -76,24 +76,24 @@ class TrainRunner:
             '--results-path',
             type=str,
             required=True,
-            help='Path where the results and evaluation metrics will be saved.'
+            help='Path where the results will be saved.'
         )
         # Optional args.
         parser.add_argument(
             '--model',
             type=str,
-            default='gemma3:1b',
+            default='gemma3:4b',
             help='Ollama LLM model name for genre predictor.'
         )
         return parser.parse_args()
 
-    def _set_file_paths(self: 'ClassifierPipeline') -> None:
+    def _set_file_paths(self: 'TrainRunner') -> None:
         '''
         Set the paths for the training-related files.
         '''
         # Extract and assign data paths for the task.
         data_path = self.args.data_path
-        self.cache_path = f'{data_path}/genre_predictions.parquet'
+        self.cache_path = f'{data_path}/train_cache.csv'
         self.train_csv_path = f'{data_path}/train-*.csv'
         # Set path for model storage.
         self.model_path = self.args.model_path

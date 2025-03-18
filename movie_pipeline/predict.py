@@ -92,7 +92,7 @@ class PredictRunner:
         parser.add_argument(
             '--model',
             type=str,
-            default='gemma3:1b',
+            default='gemma3:4b',
             help='Ollama LLM model name for genre predictor.'
         )
         return parser.parse_args()
