@@ -27,6 +27,7 @@ from pyspark.ml.feature import StringIndexer
 from pyspark.sql.window import Window
 import pandas as pd
 import re
+import shutil
 import unicodedata
 
 
@@ -357,22 +358,41 @@ class DataUtils:
         if os.path.exists(cache_path):
             # Load from cache.
             DataUtils.logger.info(f'Loading genre predictions from cache: "{cache_path}"')
-            genre_df = spark.read.parquet(cache_path)
-            # Check if any movies are missing from cache.
-            cached_ids = set([row['tconst'] for row in genre_df.select('tconst').collect()])
-            current_ids = set([row['tconst'] for row in df.select('tconst').collect()])
-            missing_ids = current_ids - cached_ids
-            if not missing_ids:
-                return genre_df
-            # Process only missing movies
-            missing_df = df.filter(df.tconst.isin(list(missing_ids)))
-            new_predictions = predictor.predict_genres(missing_df)
-            # Combine with existing cache.
-            genre_df = genre_df.union(new_predictions)
+            try:
+                genre_df = spark.read.parquet(cache_path)
+                _ = genre_df.count()
+                # Ensure desired columns.
+                if 'tconst' not in genre_df.columns or 'genre' not in genre_df.columns:
+                    raise ValueError('Cache file is missing required columns.')
+                DataUtils.logger.info(f'Successfully loaded {genre_df.count()} genre predictions from cache.')
+                # Check if any movies are missing from cache?
+                cached_ids = set([row['tconst'] for row in genre_df.select('tconst').collect()])
+                current_ids = set([row['tconst'] for row in df.select('tconst').collect()])
+                missing_ids = current_ids - cached_ids
+                if not missing_ids:
+                    return genre_df
+                # Process only missing movies.
+                DataUtils.logger.info(f'Generating predictions for {len(missing_ids)} new movies not in cache.')
+                missing_df = df.filter(df.tconst.isin(list(missing_ids)))
+                new_predictions = predictor.predict_genres(missing_df)
+                # Combine with existing cache.
+                genre_df = genre_df.union(new_predictions)
+            except Exception as e:
+                DataUtils.logger.error(f'Error loading cache: {str(e)}')
+                # Delete corrupted cache.
+                if os.path.isdir(cache_path):
+                    shutil.rmtree(cache_path)
+                elif os.path.isfile(cache_path):
+                    os.remove(cache_path)
+                DataUtils.logger.info(f"Removed corrupted cache at: {cache_path}")
+                # Create new predictions for all movies
+                DataUtils.logger.info(f'Creating new genre predictions for {df.count()} movies')
+                genre_df = predictor.predict_genres(df)
         else:
-            # Create new predictions for all movies
+            # Create new predictions for all movies.
             DataUtils.logger.info(f'Creating new genre predictions for {df.count()} movies')
             genre_df = predictor.predict_genres(df)
         # Save updated cache.
         genre_df.write.mode('overwrite').parquet(cache_path)
+        DataUtils.logger.info(f'Saved {genre_df.count()} genre predictions to cache')
         return genre_df
