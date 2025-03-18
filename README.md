@@ -1,8 +1,9 @@
 # Big-Data-IMDB-Classifier
 
-TODO:
-- update requirements.txt
-- basic sections (about, authors, etc)
+TODO (sections):
+- note: completed as part of uva course
+- about (in a few sentences)
+- classic contribution
 
 ### WIP: instructions
 
