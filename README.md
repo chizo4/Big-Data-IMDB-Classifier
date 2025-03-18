@@ -30,17 +30,17 @@ ollama pull gemma3:1b
 bash script/setup-env.sh
 ```
 
-4. to run training script execute:
+4. to run training script execute (takes a while):
 ```bash
 bash script/run-train.sh imdb directing.json writing.json gemma3:1b
 ```
 
 5. run prediction on DEV set:
 ```bash
-bash script/run-predict imdb directing.json writing.json validation_hidden.csv gemma3:1b
+bash script/run-predict.sh imdb directing.json writing.json validation_hidden.csv gemma3:1b
 ```
 
 6. run prediction on TEST set:
 ```bash
-bash script/run-predict imdb directing.json writing.json test_hidden.csv gemma3:1b
+bash script/run-predict.sh imdb directing.json writing.json test_hidden.csv gemma3:1b
 ```
