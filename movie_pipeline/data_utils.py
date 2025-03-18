@@ -405,3 +405,29 @@ class DataUtils:
                     if tconst in current_ids]
         genre_df = spark.createDataFrame(result_rows)
         return genre_df
+
+    @staticmethod
+    def save_preds_txt(df: 'DataFrame', output_txt_path: str) -> None:
+        '''
+        Save predictions to a TXT file.
+
+            Parameters:
+            -----------
+            df : DataFrame
+                The DataFrame containing the predictions.
+            output_txt_path : str
+                The path to save the predictions.
+        '''
+        # Extract the predictions and convert numeric predictions to boolean strings.
+        DataUtils.logger.info('Converting predictions to boolean strings...')
+        pred_results = df.select('tconst', 'prediction').collect()
+        pred_strings = []
+        for row in pred_results:
+            # Convert prediction value (0.0 or 1.0) to "True" or "False" string.
+            pred_value = 'True' if row['prediction'] == 1.0 else 'False'
+            pred_strings.append(pred_value)
+        # Write predictions to TXT file.
+        DataUtils.logger.info(f'Writing {len(pred_strings)} predictions to: "{output_txt_path}".')
+        with open(output_txt_path, 'w') as f:
+            for pred in pred_strings:
+                f.write(f"{pred}\n")
