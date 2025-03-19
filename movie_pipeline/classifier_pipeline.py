@@ -17,17 +17,14 @@ VERSION:
 '''
 
 
+from classifier_model import ClassifierModel
 from data_utils import DataUtils
 import json
 from llm_predictor import LLMGenrePredictor
 from logger import get_logger
 import os
 from pathlib import Path
-from pyspark.ml import Pipeline as SparkPipeline
-from pyspark.ml.classification import RandomForestClassifier
-from pyspark.ml.evaluation import MulticlassClassificationEvaluator
 from pyspark.ml.feature import VectorAssembler, StandardScaler
-from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, when, floor, concat, lit
 
@@ -40,7 +37,7 @@ class ClassifierPipeline:
                          (1) Loading data (from CSV/JSON).
                          (2) Pre-processing data (missing values, data types, etc.).
                          (3) Feature engineering (metadata, genre predictions, etc.).
-                         (4) Train the Random Forest Classifier model.
+                         (4) Train the classifier model.
                          (5) Run predictions/evaluations.
     -------------------------
     '''
@@ -67,7 +64,7 @@ class ClassifierPipeline:
             Parameters:
             -----------
             model_path : str
-                The path to save the trained RF model.
+                The path to save the trained model.
             results_path : str
                 The path to save the results and evaluation metrics.
             directing_json_path : str
@@ -100,18 +97,16 @@ class ClassifierPipeline:
             model_name=llm_name,
             spark=self.spark
         )
-        # Initialize RF classifier and related scaler.
-        self.rf_classifier = RandomForestClassifier(
-            featuresCol='scaled_features',
-            labelCol='label',
-            numTrees=100,
-            seed=42
-        )
+        # Initialize feature scaler and classifier model.
         self.scaler = StandardScaler(
             inputCol='features',
             outputCol='scaled_features',
             withStd=True,
             withMean=False
+        )
+        self.classifier_model = ClassifierModel(
+            model_path=model_path,
+            feature_cols=self.feature_cols
         )
         # Initialize the median dictionary for numeric columns.
         self.median_dict = {
@@ -218,7 +213,7 @@ class ClassifierPipeline:
         df = DataUtils.normalize_text_cols(df)
         return df
 
-    def merge_metadata_into_df(self: 'ClassifierPipeline', df: 'DataFrame') -> 'DataFrame':
+    def _merge_metadata_into_df(self: 'ClassifierPipeline', df: 'DataFrame') -> 'DataFrame':
         '''
         Merge movie metadata - writing and directing - into main DataFrame.
         For movies with multiple writers/directors, select the one with highest occurrence.
@@ -248,7 +243,7 @@ class ClassifierPipeline:
         df = df.withColumn('director', when(col('director').isNull(), 'unknown').otherwise(col('director')))
         return df
 
-    def predict_genres_llm(self, df: 'DataFrame') -> 'DataFrame':
+    def _predict_genres_llm(self, df: 'DataFrame') -> 'DataFrame':
         '''
         Predict movie genres using LLM and add them to the DataFrame.
 
@@ -299,7 +294,7 @@ class ClassifierPipeline:
         '''
         # (1) Join movie dataset with writing and directing metadata.
         ClassifierPipeline.logger.info('Merging METADATA JSON into main DataFrame...')
-        df = self.merge_metadata_into_df(df)
+        df = self._merge_metadata_into_df(df)
         ClassifierPipeline.logger.info('Initial DataFrame after metadata merge:')
         df.show(10, False)
         # (2) For TRAIN: convert string labels to binary numeric, where: "True" -> 1.0, "False" -> 0.0.
@@ -308,7 +303,7 @@ class ClassifierPipeline:
             df = df.withColumn('label', col('label').cast('double'))
         # (3) Apply LLM to introduce new synthetic feature: "genre".
         ClassifierPipeline.logger.info('Generating synthetic genre features via LLM...')
-        df = self.predict_genres_llm(df)
+        df = self._predict_genres_llm(df)
         # (4) Handle "decade" feature by processing "startYear".
         ClassifierPipeline.logger.info('Adding "decade" feature based on "startYear" records...')
         df = df.withColumn('startYear', when(col('startYear').isNull(), 2000).otherwise(col('startYear')))
@@ -329,7 +324,7 @@ class ClassifierPipeline:
         ClassifierPipeline.logger.info(f'Feature column names: {self.feature_cols}')
         # (7) Handle missing values.
         df = df.fillna(0)
-        # (0) Assemble all feature columns into a single vector.
+        # (8) Assemble all feature columns into a single vector.
         ClassifierPipeline.logger.info('Assembling features into a single vector...')
         assembler = VectorAssembler(inputCols=list(self.feature_cols), outputCol='features')
         df = assembler.transform(df)
@@ -341,64 +336,6 @@ class ClassifierPipeline:
         df.show(10, False)
         return df
 
-    def _train_model(self: 'ClassifierPipeline', train_df: 'DataFrame') -> 'SparkPipeline':
-        '''
-        Train the RandomForestClassifier model using the engineered features,
-        and save it for further use.
-
-            Parameters:
-            -----------
-            df : DataFrame
-                The preprocessed and feature-engineered DataFrame for training.
-
-            Returns:
-            -----------
-            model : SparkPipeline
-                The trained model.
-        '''
-        # train_df, val_df = train_df.randomSplit([0.8, 0.2], seed=42) #TEMP!
-        # # Set Spark ML Pipeline to encapsulate training steps.
-        # spark_pipeline = SparkPipeline(stages=[self.rf_classifier])
-        # model = spark_pipeline.fit(train_df) #df
-        # # Save trained model.
-        # model.write().overwrite().save(self.model_path)
-        # ClassifierPipeline.logger.info(f'TRAINED RF model saved to: "{self.model_path}".')
-        # # TEMP: some eval debugs
-        # y_pred = model.transform(val_df)
-        # evaluator = MulticlassClassificationEvaluator(
-        #     labelCol="label",
-        #     predictionCol="prediction",
-        #     metricName="accuracy"
-        # )
-        # accuracy = evaluator.evaluate(y_pred)
-        # print("Model Accuracy:", accuracy)
-        # return model
-        # TODO: pick one model for now. then perform small hyperparam search.
-        train_df, val_df = train_df.randomSplit([0.8, 0.2], seed=42)
-        # Tune hyperparameters
-        paramGrid = (ParamGridBuilder()
-                    .addGrid(self.rf_classifier.numTrees, [100, 200])
-                    .addGrid(self.rf_classifier.maxDepth, [8, 16])
-                    # .addGrid(self.rf_classifier.featureSubsetStrategy, ['sqrt', 'log2'])
-                    .build())
-
-        evaluator = MulticlassClassificationEvaluator(labelCol="label", metricName="accuracy")
-        # Use CrossValidator for tuning
-        crossval = CrossValidator(estimator=self.rf_classifier,
-                                estimatorParamMaps=paramGrid,
-                                evaluator=evaluator)
-                                # numFolds=2, # 3-fold cross-validation
-                                # parallelism=4) #parallelism for faster compute. spark feature here.
-        model = crossval.fit(train_df)
-        best_model = model.bestModel
-        # Save the best model
-        best_model.write().overwrite().save(self.model_path)
-        # Evaluate best model
-        y_pred = best_model.transform(val_df)
-        accuracy = evaluator.evaluate(y_pred)
-        print(f"Best Model Accuracy: {accuracy}")
-        return best_model
-
     def run_train(self: 'ClassifierPipeline', train_csv_path: str,) -> None:
         '''
         Main method to execute pipeline training.
@@ -407,7 +344,7 @@ class ClassifierPipeline:
             (1) Load data.
             (2) Pre-process data.
             (3) Apply feature engineering.
-            (4) Train RF classifier model and save it.
+            (4) Train classifier model and save it.
         '''
         # (1) Load data.
         ClassifierPipeline.logger.info('***(1) LOADING DATA...***')
@@ -423,34 +360,11 @@ class ClassifierPipeline:
         ClassifierPipeline.logger.info('***FE: TRAIN SET***')
         train_df = self._engineer_features(train_df)
         ClassifierPipeline.logger.info('***(3) FEATURE ENGINEERING: COMPLETE!***')
-        # (4) Train the RF model and save.
-        ClassifierPipeline.logger.info('***(4) TRAINING RANDOM FOREST CLASSIFIER...***')
-        # rf_model = self._train_model(train_df)
+        # (4) Train the model and save.
+        self.classifier_model.update_feature_cols(self.feature_cols)
+        ClassifierPipeline.logger.info('***(4) TRAINING CLASSIFIER MODEL...***')
+        self.classifier_model.train(train_df)
         ClassifierPipeline.logger.info('***(4) MODEL TRAINING: COMPLETE!***')
-
-    def _predict_model(self: 'ClassifierPipeline', test_df: 'DataFrame', output_txt_path: str) -> None:
-        '''
-        Load the trained model, make predictions on the test data, and save predictions to a text file.
-
-            Parameters:
-            -----------
-            test_df : DataFrame
-                The preprocessed and feature-engineered test DataFrame.
-            output_txt_path : str
-                Path where the prediction results should be saved.
-        '''
-        # Load the trained model.
-        ClassifierPipeline.logger.info(f'Loading model from: "{self.model_path}".')
-        try:
-            loaded_model = SparkPipeline.load(self.model_path)
-        except Exception as e:
-            ClassifierPipeline.logger.error(f'Error loading model: {str(e)}')
-            raise RuntimeError(f'Could not load model from "{self.model_path}".')
-        # Make predictions on the test data.
-        ClassifierPipeline.logger.info('Running predictions on test data...')
-        predictions_df = loaded_model.transform(test_df)
-        # Convert and save predictions into TXT file.
-        DataUtils.save_preds_txt(predictions_df, output_txt_path)
 
     def run_predict(self: 'ClassifierPipeline', input_csv_path: str, output_txt_path: str) -> None:
         '''
@@ -476,6 +390,9 @@ class ClassifierPipeline:
         test_df = self._engineer_features(test_df)
         ClassifierPipeline.logger.info('***(3) FEATURE ENGINEERING: COMPLETE!***')
         # (4) Run predictions via loaded model.
+        self.classifier_model.update_feature_cols(self.feature_cols)
         ClassifierPipeline.logger.info('***(4) RUNNING MODEL PREDICTIONS...***')
-        self._predict_model(test_df, output_txt_path)
+        predictions_df = self.classifier_model.predict(test_df)
+        # Convert and save predictions into TXT file.
+        DataUtils.save_preds_txt(predictions_df, output_txt_path)
         ClassifierPipeline.logger.info('***(4) RUNNING MODEL PREDICTIONS: COMPLETE!***')
