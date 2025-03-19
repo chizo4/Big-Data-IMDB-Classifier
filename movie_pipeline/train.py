@@ -93,7 +93,8 @@ class TrainRunner:
         '''
         # Extract and assign data paths for the task.
         data_path = self.args.data_path
-        self.cache_path = f'{data_path}/train_cache.csv'
+        model_name = self.args.model.replace(':', '_')
+        self.cache_path = f'{data_path}/train_{model_name}_cache.csv'
         self.train_csv_path = f'{data_path}/train-*.csv'
         # Set path for model storage.
         self.model_path = self.args.model_path

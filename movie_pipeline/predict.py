@@ -31,7 +31,7 @@ class PredictRunner:
     '''
 
     # Base file name for results to be customized for use case.
-    RESULT_FILE_BASE = r'{set_name}_prediction_{timestamp}.txt'
+    RESULT_FILE_BASE = r'{set_name}_{model_name}_{timestamp}.txt'
 
     def __init__(self: 'PredictRunner') -> None:
         '''
@@ -98,7 +98,7 @@ class PredictRunner:
         return parser.parse_args()
 
     @staticmethod
-    def _set_pred_file(base_path: str, set_name: str) -> str:
+    def _set_pred_file(base_path: str, set_name: str, model_name: str) -> str:
         '''
         Initialize the CSV prediction file for the classification task.
         Annotate it with the current timestamp and set name.
@@ -109,6 +109,8 @@ class PredictRunner:
                 Base path to store results.
             set_name : str
                 Name of the set to initialize the prediction file for.
+            model_name : str
+                Name of the LLM used for prediction.
 
             Returns:
             -------------------------
@@ -118,6 +120,7 @@ class PredictRunner:
         curr_time = datetime.now().strftime('%Y%m%d_%H%M%S')
         pred_filename = PredictRunner.RESULT_FILE_BASE
         pred_filename = pred_filename.replace('{set_name}', set_name)
+        pred_filename = pred_filename.replace('{model_name}', model_name)
         pred_filename = pred_filename.replace('{timestamp}', curr_time)
         pred_path = f'{base_path}/{pred_filename}'
         return pred_path
@@ -128,11 +131,13 @@ class PredictRunner:
         '''
         # Extract and assign data paths for the task.
         data_path = self.args.data_path
-        # Extract set name identified from CSV name.
+        # Extract set name identified from CSV name and model name from CLI args.
         set_name = self.args.test_csv.split('/')[-1].split('_')[0]
-        self.cache_path = f'{data_path}/{set_name}_cache.csv'
+        model_name = self.args.model.replace(':', '_')
+        self.cache_path = f'{data_path}/{set_name}_{model_name}_cache.csv'
         self.pred_path = self._set_pred_file(
             set_name=set_name,
+            model_name=model_name,
             base_path=self.args.results_path
         )
 
