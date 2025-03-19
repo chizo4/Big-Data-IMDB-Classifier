@@ -140,7 +140,7 @@ class ClassifierPipeline:
         else:
             # Otherwise - loading standard data; e.g. val/test CSV data and medians
             df = DataUtils.load_csv(self.spark, csv_path)
-            self._load_medians()
+        self._load_medians()
         self.data_dict = {
             'data': df,
             'directing': directing_df,
@@ -199,7 +199,9 @@ class ClassifierPipeline:
             # From TRAIN: find medians for numeric columns (for further injection).
             # For other sets, assign pre-computed values, since TRAIN runs first.
             if self.train:
-                self.median_dict[col_name] = DataUtils.calc_median_col(df, col_name)
+                # Only calculate if we have no pre-computed values.
+                if self.median_dict[col_name] is None:
+                    self.median_dict[col_name] = DataUtils.calc_median_col(df, col_name)
             # Inject TRAIN median values into NULL fields.
             df = df.withColumn(
                 col_name, when(col(col_name).isNull(), self.median_dict[col_name]).otherwise(col(col_name))
@@ -375,8 +377,8 @@ class ClassifierPipeline:
         train_df, val_df = train_df.randomSplit([0.8, 0.2], seed=42)
         # Tune hyperparameters
         paramGrid = (ParamGridBuilder()
-                    .addGrid(self.rf_classifier.numTrees, [100, 300, 500])
-                    .addGrid(self.rf_classifier.maxDepth, [8, 12, 16])
+                    .addGrid(self.rf_classifier.numTrees, [100, 200])
+                    .addGrid(self.rf_classifier.maxDepth, [8, 16])
                     # .addGrid(self.rf_classifier.featureSubsetStrategy, ['sqrt', 'log2'])
                     .build())
 
@@ -384,9 +386,9 @@ class ClassifierPipeline:
         # Use CrossValidator for tuning
         crossval = CrossValidator(estimator=self.rf_classifier,
                                 estimatorParamMaps=paramGrid,
-                                evaluator=evaluator,
-                                numFolds=2, # 3-fold cross-validation
-                                parallelism=4) #parallelism for faster compute. spark feature here.
+                                evaluator=evaluator)
+                                # numFolds=2, # 3-fold cross-validation
+                                # parallelism=4) #parallelism for faster compute. spark feature here.
         model = crossval.fit(train_df)
         best_model = model.bestModel
         # Save the best model
@@ -423,7 +425,7 @@ class ClassifierPipeline:
         ClassifierPipeline.logger.info('***(3) FEATURE ENGINEERING: COMPLETE!***')
         # (4) Train the RF model and save.
         ClassifierPipeline.logger.info('***(4) TRAINING RANDOM FOREST CLASSIFIER...***')
-        rf_model = self._train_model(train_df)
+        # rf_model = self._train_model(train_df)
         ClassifierPipeline.logger.info('***(4) MODEL TRAINING: COMPLETE!***')
 
     def _predict_model(self: 'ClassifierPipeline', test_df: 'DataFrame', output_txt_path: str) -> None:
