@@ -19,11 +19,8 @@ VERSION:
 
 from classifier_model import ClassifierModel
 from data_utils import DataUtils
-import json
 from llm_predictor import LLMGenrePredictor
 from logger import get_logger
-import os
-from pathlib import Path
 from pyspark.ml.feature import VectorAssembler, StandardScaler
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, when, floor, concat, lit
@@ -54,9 +51,9 @@ class ClassifierPipeline:
             results_path: str,
             directing_json_path: str,
             writing_json_path: str,
-            llm_cache_path: str,
-            llm_name: str='gemma3:4b',
-            train: bool=False
+            llm_cache_path_train: str,
+            llm_cache_path_test: str,
+            llm_name: str='gemma3:4b'
         ) -> None:
         '''
         Initialize the ClassifierPipeline class.
@@ -71,20 +68,19 @@ class ClassifierPipeline:
                 The path to the directing metadata JSON file.
             writing_json_path : str
                 The path to the writing metadata JSON file.
-            llm_cache_path : str
-                The path to the LLM genre predictions cache.
+            llm_cache_path_train : str
+                The path to the LLM cache for training.
+            llm_cache_path_test : str
+                The path to the LLM cache for predictions.
             llm_name : str
                 The name of the LLM model for genre predictions.
-            train : bool
-                Flag to determine the mode of the pipeline (train/predict).
         '''
         self.data_dict = {}
-        # Default flag for train/predict mode.
-        self.train = train
         # Assign standard paths.
         self.model_path = model_path
         self.results_path = results_path
-        self.cache_path = llm_cache_path
+        self.cache_path_train = llm_cache_path_train
+        self.cache_path_test = llm_cache_path_test
         self.directing_json_path = directing_json_path
         self.writing_json_path = writing_json_path
         # Initialize feature cols that will be further extended.
@@ -113,58 +109,35 @@ class ClassifierPipeline:
             'runtimeMinutes': None,
             'numVotes': None
         }
-        self.medians_file_path = Path(os.path.dirname(llm_cache_path)) / 'medians.json'
 
-    def _load_data(self: 'ClassifierPipeline', csv_path: str) -> None:
+    def _load_data(self: 'ClassifierPipeline', train_csv_path: str, test_csv_path: str) -> None:
         '''
         Load data from CSV and JSON files into Spark DataFrames
         to build a full-data dictionary.
 
             Parameters:
             -----------
-            file_path : str
-                The path to load CSV data.
+            train_csv_path : str
+                The path to load train CSV data.
+            test_csv_path : str
+                The path to load test CSV data.
         '''
         # Load JSON files with metadata for directing and writing.
         writing_df = DataUtils.load_json(self.spark, self.writing_json_path)
         # For directing: merge movie and director dictionaries (since unstructured).
         directing_df = DataUtils.merge_directing_json(self.spark, self.directing_json_path)
         # For train data: detect all CSV files and load them accordingly.
-        if self.train:
-            df = DataUtils.load_train_csv(self.spark, csv_path)
-        else:
-            # Otherwise - loading standard data; e.g. val/test CSV data and medians
-            df = DataUtils.load_csv(self.spark, csv_path)
-        self._load_medians()
+        train_df = DataUtils.load_train_csv(self.spark, train_csv_path)
+        # For test data, load standard data; e.g. val/test CSV data and medians.
+        test_df = DataUtils.load_csv(self.spark, test_csv_path)
         self.data_dict = {
-            'data': df,
+            'train_data': train_df,
+            'test_data': test_df,
             'directing': directing_df,
             'writing': writing_df
         }
 
-    def _load_medians(self: 'ClassifierPipeline') -> None:
-        '''
-        Load median values from JSON.
-        '''
-        try:
-            with open(self.medians_file_path, 'r') as f:
-                self.median_dict = json.load(f)
-                ClassifierPipeline.logger.info(f'Loaded pre-computed medians: {self.median_dict}')
-        except Exception as e:
-            ClassifierPipeline.logger.warning(f'Failed to load medians: {e}')
-
-    def _save_medians(self: 'ClassifierPipeline') -> None:
-        '''
-        Save median values into JSON. In training mode.
-        '''
-        try:
-            with open(self.medians_file_path, 'w') as f:
-                json.dump(self.median_dict, f)
-                ClassifierPipeline.logger.info(f'Saved medians to "{self.medians_file_path}".')
-        except Exception as e:
-            ClassifierPipeline.logger.warning(f'Failed to save medians: {e}')
-
-    def _preprocess(self: 'ClassifierPipeline', df: 'DataFrame') -> 'DataFrame':
+    def _preprocess(self: 'ClassifierPipeline', df: 'DataFrame', train: bool=False) -> 'DataFrame':
         '''
         Preprocess the data by handling missing values, fixing data types,
         normalizing text fields, handling outliers, etc. Utilizes various
@@ -180,6 +153,8 @@ class ClassifierPipeline:
             -----------
             df : DataFrame
                 The input dataframe to preprocess.
+            train : bool
+                Flag indicating if the data is for training.
 
             Returns:
             -----------
@@ -193,7 +168,7 @@ class ClassifierPipeline:
         for col_name in ['runtimeMinutes', 'numVotes']:
             # From TRAIN: find medians for numeric columns (for further injection).
             # For other sets, assign pre-computed values, since TRAIN runs first.
-            if self.train:
+            if train:
                 # Only calculate if we have no pre-computed values.
                 if self.median_dict[col_name] is None:
                     self.median_dict[col_name] = DataUtils.calc_median_col(df, col_name)
@@ -201,9 +176,6 @@ class ClassifierPipeline:
             df = df.withColumn(
                 col_name, when(col(col_name).isNull(), self.median_dict[col_name]).otherwise(col(col_name))
             )
-        # Save medians for later prediction mode.
-        if self.train:
-            self._save_medians()
         # (3) Ensure startYear ≤ endYear and handle missing values.
         df = df.withColumn('startYear', when(col('startYear').isNull(), col('endYear')).otherwise(col('startYear')))
         df = df.withColumn('endYear', when(col('endYear').isNull(), col('startYear')).otherwise(col('endYear')))
@@ -243,7 +215,7 @@ class ClassifierPipeline:
         df = df.withColumn('director', when(col('director').isNull(), 'unknown').otherwise(col('director')))
         return df
 
-    def _predict_genres_llm(self, df: 'DataFrame') -> 'DataFrame':
+    def _predict_genres_llm(self: 'ClassifierPipeline', df: 'DataFrame', train: bool=False) -> 'DataFrame':
         '''
         Predict movie genres using LLM and add them to the DataFrame.
 
@@ -251,6 +223,8 @@ class ClassifierPipeline:
             -----------
             df : DataFrame
                 The main DataFrame to predict genres for.
+            train : bool
+                Flag indicating if the data is for training.
 
             Returns:
             -----------
@@ -258,8 +232,9 @@ class ClassifierPipeline:
                 The main DataFrame with added genre predictions.
         '''
         # Get genre predictions (from cache or by generating new ones).
+        llm_cache = self.cache_path_train if train else self.cache_path_test
         genre_df = DataUtils.load_or_create_genre_predictions(
-            self.spark, df, self.genre_predictor_llm, self.cache_path
+            self.spark, df, self.genre_predictor_llm, llm_cache
         )
         # Join the predictions with the main dataframe.
         df = df.join(genre_df, on='tconst', how='left')
@@ -267,7 +242,7 @@ class ClassifierPipeline:
         df = df.withColumn('genre', when(col('genre').isNull(), 'unknown').otherwise(col('genre')))
         return df
 
-    def _engineer_features(self: 'ClassifierPipeline', df: 'DataFrame') -> 'DataFrame':
+    def _engineer_features(self: 'ClassifierPipeline', df: 'DataFrame', train: bool=False) -> 'DataFrame':
         '''
         Apply feature engineering to the DataFrame, handling metadata.
 
@@ -286,6 +261,8 @@ class ClassifierPipeline:
             -----------
             df : DataFrame
                 The input dataframe to be transformed.
+            train : bool
+                Flag indicating if the data is for training.
 
             Returns:
             -----------
@@ -298,12 +275,12 @@ class ClassifierPipeline:
         ClassifierPipeline.logger.info('Initial DataFrame after metadata merge:')
         df.show(10, False)
         # (2) For TRAIN: convert string labels to binary numeric, where: "True" -> 1.0, "False" -> 0.0.
-        if self.train:
+        if train:
             ClassifierPipeline.logger.info('Converting boolean "label" field to binary for TRAIN...')
             df = df.withColumn('label', col('label').cast('double'))
         # (3) Apply LLM to introduce new synthetic feature: "genre".
         ClassifierPipeline.logger.info('Generating synthetic genre features via LLM...')
-        df = self._predict_genres_llm(df)
+        df = self._predict_genres_llm(df, train=train)
         # (4) Handle "decade" feature by processing "startYear".
         ClassifierPipeline.logger.info('Adding "decade" feature based on "startYear" records...')
         df = df.withColumn('startYear', when(col('startYear').isNull(), 2000).otherwise(col('startYear')))
@@ -336,63 +313,58 @@ class ClassifierPipeline:
         df.show(10, False)
         return df
 
-    def run_train(self: 'ClassifierPipeline', train_csv_path: str,) -> None:
+    def run(
+            self: 'ClassifierPipeline',
+            train_csv_path: str,
+            test_csv_path: str,
+            output_txt_path: str
+        ) -> None:
         '''
-        Main method to execute pipeline training.
+        Main method to execute full pipeline workflow: training + predicting.
 
             PROCEDURE:
             (1) Load data.
             (2) Pre-process data.
             (3) Apply feature engineering.
-            (4) Train classifier model and save it.
+            (4) Train classifier model.
+            (5) Run predictions on the in-memory model.
+
+            Parameters:
+            -----------
+            train_csv_path : str
+                The path to the training CSV data.
+            test_csv_path : str
+                The path to the test CSV data.
+            output_txt_path : str
+                The path to save the predictions.
         '''
-        # (1) Load data.
+        # (1) Load data: TRAIN and TEST.
         ClassifierPipeline.logger.info('***(1) LOADING DATA...***')
-        self._load_data(csv_path=train_csv_path)
-        train_df = self.data_dict['data']
+        self._load_data(train_csv_path=train_csv_path, test_csv_path=test_csv_path)
+        train_df = self.data_dict['train_data']
+        test_df = self.data_dict['test_data']
         ClassifierPipeline.logger.info('***(1) DATA: LOADED!***')
-        # (2) Pre-process data.
+        # (2) Pre-process data: TRAIN and TEST.
         ClassifierPipeline.logger.info('***(2) PRE-PROCESSING DATA...***')
-        train_df = self._preprocess(train_df)
-        ClassifierPipeline.logger.info('***(2) DATA PRE-PROCESSING: COMPLETE!***')
-        # (3) Apply feature engineering procedures.
-        ClassifierPipeline.logger.info('***(3) APPLYING FEATURE ENGINEERING...***')
-        ClassifierPipeline.logger.info('***FE: TRAIN SET***')
-        train_df = self._engineer_features(train_df)
-        ClassifierPipeline.logger.info('***(3) FEATURE ENGINEERING: COMPLETE!***')
-        # (4) Train the model and save.
-        self.classifier_model.update_feature_cols(self.feature_cols)
-        ClassifierPipeline.logger.info('***(4) TRAINING CLASSIFIER MODEL...***')
-        self.classifier_model.train(train_df)
-        ClassifierPipeline.logger.info('***(4) MODEL TRAINING: COMPLETE!***')
-
-    def run_predict(self: 'ClassifierPipeline', input_csv_path: str, output_txt_path: str) -> None:
-        '''
-        Main method to execute pipeline predictions.
-
-            PROCEDURE:
-            (1) Load data.
-            (2) Pre-process data.
-            (3) Apply feature engineering.
-            (4) Run predictions via loaded model.
-        '''
-        # (1) Load data.
-        ClassifierPipeline.logger.info('***(1) LOADING DATA...***')
-        self._load_data(csv_path=input_csv_path)
-        test_df = self.data_dict['data']
-        # (2) Pre-process data.
-        ClassifierPipeline.logger.info('***(2) PRE-PROCESSING DATA...***')
+        ClassifierPipeline.logger.info('***PRE-PROCESS: TRAIN SET***')
+        train_df = self._preprocess(train_df, train=True)
+        ClassifierPipeline.logger.info('***PRE-PROCESS: TEST SET***')
         test_df = self._preprocess(test_df)
         ClassifierPipeline.logger.info('***(2) DATA PRE-PROCESSING: COMPLETE!***')
         # (3) Apply feature engineering procedures.
         ClassifierPipeline.logger.info('***(3) APPLYING FEATURE ENGINEERING...***')
+        ClassifierPipeline.logger.info('***FE: TRAIN SET***')
+        train_df = self._engineer_features(train_df, train=True)
+        self.classifier_model.update_feature_cols(self.feature_cols)
         ClassifierPipeline.logger.info('***FE: TEST SET***')
         test_df = self._engineer_features(test_df)
         ClassifierPipeline.logger.info('***(3) FEATURE ENGINEERING: COMPLETE!***')
-        # (4) Run predictions via loaded model.
-        self.classifier_model.update_feature_cols(self.feature_cols)
-        ClassifierPipeline.logger.info('***(4) RUNNING MODEL PREDICTIONS...***')
+        # (4) Train the model and save.
+        ClassifierPipeline.logger.info('***(4) TRAINING CLASSIFIER MODEL...***')
+        self.classifier_model.train(train_df)
+        ClassifierPipeline.logger.info('***(4) MODEL TRAINING: COMPLETE!***')
+        # (5) Run predictions on the model.
+        ClassifierPipeline.logger.info('***(5) RUNNING PREDICTIONS...***')
         predictions_df = self.classifier_model.predict(test_df)
-        # Convert and save predictions into TXT file.
         DataUtils.save_preds_txt(predictions_df, output_txt_path)
-        ClassifierPipeline.logger.info('***(4) RUNNING MODEL PREDICTIONS: COMPLETE!***')
+        ClassifierPipeline.logger.info('***(5) PREDICTIONS: COMPLETE!***')
