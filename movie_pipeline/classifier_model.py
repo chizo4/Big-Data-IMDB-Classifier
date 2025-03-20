@@ -42,6 +42,7 @@ class ClassifierModel:
             feature_cols : set
                 Set of feature column names (will be updated by pipeline)
         '''
+        self.model = None
         self.model_path = model_path
         self.feature_cols = feature_cols if feature_cols else set()
         # Initialize Random Forest classifier with optimized parameters.
@@ -49,7 +50,7 @@ class ClassifierModel:
             featuresCol='scaled_features',
             labelCol='label',
             numTrees=200,
-            maxDepth=16,
+            maxDepth=10,
             minInstancesPerNode=5,
             impurity='gini',
             bootstrap=True,
@@ -68,25 +69,7 @@ class ClassifierModel:
         self.feature_cols = feature_cols
         ClassifierModel.logger.info(f'Updated feature columns: {self.feature_cols}')
 
-    def train(self: 'ClassifierModel', train_df: 'DataFrame') -> None:
-        '''
-        Train the Random Forest classifier using the engineered features.
-
-            Parameters:
-            -----------
-            train_df : DataFrame
-                The preprocessed and feature-engineered DataFrame for training.
-        '''
-        # Run training.
-        ClassifierModel.logger.info('Training model on TRAINING set...')
-        spark_pipeline = ml.Pipeline(stages=[self.classifier])
-        model = spark_pipeline.fit(train_df)
-        # Save trained model.
-        model.write().overwrite().save(self.model_path)
-        ClassifierModel.logger.info(f'TRAINED model saved to: "{self.model_path}"')
-        self._analyze_feature_importance(model)
-
-    def _analyze_feature_importance(self: 'ClassifierModel', model: 'ml.Pipeline') -> None:
+    def _analyze_feature_importance(self: 'ClassifierModel') -> None:
         '''
         Analyze and print feature importances from the model.
 
@@ -95,8 +78,8 @@ class ClassifierModel:
             model : ml.Pipeline
                 Trained model pipeline
         '''
-        if hasattr(model.stages[-1], 'featureImportances'):
-            importances = model.stages[-1].featureImportances
+        if hasattr(self.model.stages[-1], 'featureImportances'):
+            importances = self.model.stages[-1].featureImportances
             feature_names = list(self.feature_cols)
             feature_importance_pairs = [
                 (feature_names[i], float(importances[i])) for i in range(min(len(feature_names), len(importances)))
@@ -106,28 +89,39 @@ class ClassifierModel:
             for i, (feature, importance) in enumerate(sorted_importances[:5]):
                 ClassifierModel.logger.info(f"{i+1}. {feature:<20}: {importance:.6f}")
 
+    def train(self: 'ClassifierModel', train_df: 'DataFrame') -> None:
+        '''
+        Train the Random Forest classifier using the engineered features.
+
+            Parameters:
+            -----------
+            train_df : DataFrame
+                The preprocessed and feature-engineered DataFrame for training.
+        '''
+        # Train model.
+        ClassifierModel.logger.info('Training model on TRAINING set...')
+        spark_pipeline = ml.Pipeline(stages=[self.classifier])
+        self.model = spark_pipeline.fit(train_df)
+        # Save model.
+        self.model.write().overwrite().save(self.model_path)
+        ClassifierModel.logger.info(f'TRAINED model saved to: "{self.model_path}"')
+        # Analyze feature impacts.
+        self._analyze_feature_importance()
+
     def predict(self: 'ClassifierModel', test_df: 'DataFrame') -> 'DataFrame':
         '''
-        Load the trained model and make predictions on test data.
+        Run model predictions.
 
             Parameters:
             -----------
             test_df : DataFrame
-                The preprocessed and feature-engineered test DataFrame.
+                The preprocessed and feature-engineered DataFrame for testing.
 
             Returns:
             -----------
             predictions_df : DataFrame
                 DataFrame with predictions added.
         '''
-        # Load the trained model.
-        ClassifierModel.logger.info(f'Loading model from: "{self.model_path}"')
-        try:
-            loaded_model = ml.PipelineModel.load(self.model_path)
-        except Exception as e:
-            ClassifierModel.logger.error(f'Error loading model: {str(e)}')
-            raise RuntimeError(f'Could not load model from "{self.model_path}"')
-        # Make predictions on TEST data.
-        ClassifierModel.logger.info('Running predictions on test data...')
-        predictions_df = loaded_model.transform(test_df)
+        ClassifierModel.logger.info('Running predictions on TEST data...')
+        predictions_df = self.model.transform(test_df)
         return predictions_df
