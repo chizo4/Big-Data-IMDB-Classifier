@@ -1,54 +1,62 @@
-# Big-Data-IMDB-Classifier
+## **Big-Data-IMDB-Classifier** 🍿
 
-TODO (sections):
-- note: completed as part of uva course
-- about (in a few sentences)
-- classic contribution
+### **About**
+This project implements a high-performance movie classification pipeline using `Apache Spark`. It features a modular architecture that efficiently processes large IMDB datasets, applying efficient feature engineering including LLM-based genre prediction. The system uses a Random Forest classifier with optimized hyperparameters to predict movie ratings with accuracy exceeding 75%. Our implementation emphasizes consistent state management between training and prediction phases, efficient caching of expensive operations, and scalable processing of movie metadata from diverse sources. Data for this project is sourced from the [UvA Big Data Course 2024 Projects](https://github.com/hazourahh/big-data-course-2024-projects).
 
-data source: https://github.com/hazourahh/big-data-course-2024-projects
+---
 
-### WIP: instructions
+### **Implementation Notes**
 
-1. to run code - clone repo, access, etc.
+The pipeline implements several optimizations to improve performance:
+- [X] LLM Caching: Our system caches LLM-generated genre predictions to avoid expensive recomputation. After the first run, subsequent executions use the cached predictions.
+- [X] Unified Pipeline: Training and prediction occur in a single pipeline to ensure consistent feature transformations and categorical mappings.
+- [X] Efficient Feature Engineering: The pipeline handles complex categorical features through careful string indexing and applies appropriate scaling to numeric features.
 
+---
+
+### **Running Instructions**
+
+### Prerequisites
+1. Install [conda](https://docs.conda.io/projects/conda/en/latest/user-guide/install/index.html)
+2. Install [ollama](https://ollama.com/download)
+
+### Step 1: Clone the Repository
 ```bash
 git clone git@github.com:chizo4/Big-Data-IMDB-Classifier.git
+cd Big-Data-IMDB-Classifier
 ```
 
-2. make sure to have ollama installed via (todo:). install models via:
-
-```bash
-ollama pull [model_name]
-```
-
-in this project we utilize the `gemma3:4b` model:
+### Step 2: Install the LLM Model
 
 ```bash
 ollama pull gemma3:4b
 ```
 
-3. first setup conda env. this creates a stable python 3.10 environment and install all respective dependencies from `requirements.txt` (all experiments are run via this conda environment).
+### Step 3: Setup Environment
+
 ```bash
 bash script/setup-env.sh
 ```
 
-4. to run training script execute (takes a while):
+This creates a stable Python `3.10` environment and installs all dependencies from `requirements.txt`.
+
+### Step 4: Run the Pipeline
+
+(A) For `validation` set:
+
 ```bash
-bash script/run-train.sh imdb directing.json writing.json gemma3:4b
+bash script/run-pipeline.sh imdb directing.json writing.json validation_hidden.csv gemma3:4b
 ```
 
-note: since llm operations to create synthetic data is very have we apply a caching approach, storing the genre prediction in csv after first run on train. thanks to this, another run on save join data with these predictions to avoid this heavy recomputation.
+(B) For `test` set:
 
-5. run prediction on DEV set:
 ```bash
-bash script/run-predict.sh imdb directing.json writing.json validation_hidden.csv gemma3:4b
+bash script/run-pipeline.sh imdb directing.json writing.json test_hidden.csv gemma3:4b
 ```
 
-note: similarly as per training, we cache the first run predictions when performing feature engineering here
+---
 
-6. run prediction on TEST set:
-```bash
-bash script/run-predict.sh imdb directing.json writing.json test_hidden.csv gemma3:4b
-```
+### **Contribution**
 
-note: similarly as per training, we cache the first run predictions when performing feature engineering here
+> [!NOTE]
+> In case you had any questions associated with this project, or spotted any issue (including technical setup), please feel free to contact [`Filip J. Cierkosz`](https://github.com/chizo4) via any of the links included in the profile page. You might also want to open an [`Issue`](https://github.com/chizo4/JusTreeAI/issues/new?template=Blank+issue) with any suggested fixes, or questions.
