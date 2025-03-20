@@ -264,7 +264,7 @@ class DataUtils:
         return col_median_int
 
     @staticmethod
-    def string_index_col(df: 'DataFrame', col_name: str) -> tuple:
+    def string_index_col(df: 'DataFrame', col_name: str, return_model: bool=False) -> tuple:
         '''
         Apply string indexing to a given column.
 
@@ -274,19 +274,28 @@ class DataUtils:
                 The input DataFrame to preprocess.
             col_name : str
                 The name of the column to be processed.
+            return_model : bool
+                Whether to return the fitted StringIndexerModel.
 
             Returns:
             -----------
-            (df, output_col_name) : tuple
+            tuple :
+                - If return_model=False: (df, output_col_name)
                 Tuple of the preprocessed DataFrame and the output column name.
+                - If return_model=True: (df, output_col_name, indexer_model)
+                Tuple with DataFrame, output column name, and fitted StringIndexerModel.
         '''
         output_col_name = f'{col_name}_index'
-        # Apply string indexing.
         indexer = StringIndexer(inputCol=col_name, outputCol=output_col_name).setHandleInvalid('keep')
-        df = indexer.fit(df).transform(df)
-        # Drop intermediate columns.
+        indexer_model = indexer.fit(df)
+        df = indexer_model.transform(df)
+        # Drop intermediate column.
         df = df.drop(col_name)
-        return (df, output_col_name)
+        # Return with or without the model based on param.
+        if return_model:
+            return (df, output_col_name, indexer_model)
+        else:
+            return (df, output_col_name)
 
     @staticmethod
     def count_entity(df: 'DataFrame', key_name: str) -> 'DataFrame':
@@ -421,10 +430,28 @@ class DataUtils:
         '''
         # Extract the predictions and convert numeric predictions to boolean strings.
         DataUtils.logger.info('Converting predictions to boolean strings...')
-        pred_results = df.select('tconst', 'prediction').collect()
+        # IMPORTANT: Sort by tconst to match the original order
+        sorted_df = df.orderBy('tconst')
+        pred_results = sorted_df.select('tconst', 'prediction').collect()
+        # TODO: remove
+        # Debug logging - show prediction distribution
+        DataUtils.logger.info("Prediction distribution:")
+        true_count = 0
+        false_count = 0
+        for row in pred_results:
+            if row['prediction'] == 1.0:
+                true_count += 1
+            else:
+                false_count += 1
+        total = true_count + false_count
+        true_percent = (true_count / total) * 100 if total > 0 else 0
+        false_percent = (false_count / total) * 100 if total > 0 else 0
+        DataUtils.logger.info(f"True predictions: {true_count} ({true_percent:.2f}%)")
+        DataUtils.logger.info(f"False predictions: {false_count} ({false_percent:.2f}%)")
+        # TODO: remove
+        # Format predictions.
         pred_strings = []
         for row in pred_results:
-            # Convert prediction value (0.0 or 1.0) to "True" or "False" string.
             pred_value = 'True' if row['prediction'] == 1.0 else 'False'
             pred_strings.append(pred_value)
         # Write predictions to TXT file.

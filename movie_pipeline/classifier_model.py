@@ -4,7 +4,7 @@ FILE:
     movie_pipeline/classifier_model.py
 
 INFO:
-    Implementation of a Random Forest classifier for movie prediction.
+    Implementation of a classifier model for movie prediction.
     Handles model training, evaluation and prediction functionality.
 
 AUTHOR:
@@ -24,7 +24,7 @@ from pyspark.ml.classification import RandomForestClassifier
 class ClassifierModel:
     '''
     -------------------------
-    ClassifierModel - Class for Random Forest model training and prediction.
+    ClassifierModel - Class for model training and prediction.
     -------------------------
     '''
 
@@ -33,27 +33,30 @@ class ClassifierModel:
 
     def __init__(self: 'ClassifierModel', model_path: str, feature_cols: set=None) -> None:
         '''
-        Initialize the ClassifierModel with Random Forest configuration.
+        Initialize the ClassifierModel with target classifier configuration.
 
             Parameters:
             -----------
             model_path : str
-                Path where model will be saved/loaded from
+                Path where model will be saved/loaded from.
             feature_cols : set
-                Set of feature column names (will be updated by pipeline)
+                Set of feature column names (will be updated by pipeline).
         '''
         self.model = None
         self.model_path = model_path
         self.feature_cols = feature_cols if feature_cols else set()
-        # Initialize Random Forest classifier with optimized parameters.
+        # Initialize classifier model with optimized parameters.
         self.classifier = RandomForestClassifier(
             featuresCol='scaled_features',
             labelCol='label',
-            numTrees=200,
-            maxDepth=10,
-            minInstancesPerNode=5,
-            impurity='gini',
+            numTrees=300,
+            maxDepth=15,
+            minInstancesPerNode=2,
+            maxBins=64,
+            impurity='entropy',
             bootstrap=True,
+            featureSubsetStrategy='sqrt',
+            subsamplingRate=0.8,
             seed=42
         )
 
@@ -91,7 +94,7 @@ class ClassifierModel:
 
     def train(self: 'ClassifierModel', train_df: 'DataFrame') -> None:
         '''
-        Train the Random Forest classifier using the engineered features.
+        Train the classifier model using the engineered features.
 
             Parameters:
             -----------

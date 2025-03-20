@@ -100,6 +100,7 @@ class ClassifierPipeline:
             withStd=True,
             withMean=False
         )
+        self.indexer_models = {}
         self.classifier_model = ClassifierModel(
             model_path=model_path,
             feature_cols=self.feature_cols
@@ -296,7 +297,17 @@ class ClassifierPipeline:
         # (6) Handle categorical variables by applying StringIndexer.
         ClassifierPipeline.logger.info('String indexing categorical features...')
         for col_name in self.CATEGORIC_COLS:
-            df, output_col_name = DataUtils.string_index_col(df, col_name)
+            if train:
+                # When training, fit new indexers and store them.
+                df, output_col_name, indexer_model = DataUtils.string_index_col(
+                    df, col_name, return_model=True
+                )
+                self.indexer_models[col_name] = indexer_model
+            else:
+                # When predicting, use stored indexers from training.
+                output_col_name = f'{col_name}_index'
+                df = self.indexer_models[col_name].transform(df)
+                df = df.drop(col_name)
             self.feature_cols.add(output_col_name)
         ClassifierPipeline.logger.info(f'Feature column names: {self.feature_cols}')
         # (7) Handle missing values.
