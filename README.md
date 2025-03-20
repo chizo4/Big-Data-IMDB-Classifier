@@ -17,8 +17,8 @@ The pipeline implements several optimizations to improve performance:
 ### **Running Instructions**
 
 ### 1. Prerequisites
-1. Install [conda](https://docs.conda.io/projects/conda/en/latest/user-guide/install/index.html)
-2. Install [ollama](https://ollama.com/download)
+- Install [conda](https://docs.conda.io/projects/conda/en/latest/user-guide/install/index.html)
+- Install [ollama](https://ollama.com/download)
 
 ---
 
