@@ -433,22 +433,20 @@ class DataUtils:
         # IMPORTANT: Sort by tconst to match the original order
         sorted_df = df.orderBy('tconst')
         pred_results = sorted_df.select('tconst', 'prediction').collect()
-        # TODO: remove
-        # Debug logging - show prediction distribution
-        DataUtils.logger.info("Prediction distribution:")
-        true_count = 0
-        false_count = 0
-        for row in pred_results:
-            if row['prediction'] == 1.0:
-                true_count += 1
-            else:
-                false_count += 1
-        total = true_count + false_count
-        true_percent = (true_count / total) * 100 if total > 0 else 0
-        false_percent = (false_count / total) * 100 if total > 0 else 0
-        DataUtils.logger.info(f"True predictions: {true_count} ({true_percent:.2f}%)")
-        DataUtils.logger.info(f"False predictions: {false_count} ({false_percent:.2f}%)")
-        # TODO: remove
+        # OPTIONAL: label distribution debugs.
+        # DataUtils.logger.info("Prediction distribution:")
+        # true_count = 0
+        # false_count = 0
+        # for row in pred_results:
+        #     if row['prediction'] == 1.0:
+        #         true_count += 1
+        #     else:
+        #         false_count += 1
+        # total = true_count + false_count
+        # true_percent = (true_count / total) * 100 if total > 0 else 0
+        # false_percent = (false_count / total) * 100 if total > 0 else 0
+        # DataUtils.logger.info(f"True predictions: {true_count} ({true_percent:.2f}%)")
+        # DataUtils.logger.info(f"False predictions: {false_count} ({false_percent:.2f}%)")
         # Format predictions.
         pred_strings = []
         for row in pred_results:
