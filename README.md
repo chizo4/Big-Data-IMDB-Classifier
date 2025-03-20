@@ -8,31 +8,37 @@ This project implements a high-performance movie classification pipeline using `
 ### **Implementation Notes**
 
 The pipeline implements several optimizations to improve performance:
-- [X] LLM Caching: Our system caches LLM-generated genre predictions to avoid expensive recomputation. After the first run, subsequent executions use the cached predictions.
-- [X] Unified Pipeline: Training and prediction occur in a single pipeline to ensure consistent feature transformations and categorical mappings.
-- [X] Efficient Feature Engineering: The pipeline handles complex categorical features through careful string indexing and applies appropriate scaling to numeric features.
+- [X] **LLM Caching:** Our system caches LLM-generated genre predictions to avoid expensive recomputation. After the first run, subsequent executions use the cached predictions.
+- [X] **Unified Pipeline:** Training and prediction occur in a single pipeline to ensure consistent feature transformations and categorical mappings.
+- [X] **Efficient Feature Engineering:** The pipeline handles complex categorical features through careful string indexing and applies appropriate scaling to numeric features.
 
 ---
 
 ### **Running Instructions**
 
-### Prerequisites
+### 1. Prerequisites
 1. Install [conda](https://docs.conda.io/projects/conda/en/latest/user-guide/install/index.html)
 2. Install [ollama](https://ollama.com/download)
 
-### Step 1: Clone the Repository
+---
+
+### 2. Clone the Repository
 ```bash
 git clone git@github.com:chizo4/Big-Data-IMDB-Classifier.git
 cd Big-Data-IMDB-Classifier
 ```
 
-### Step 2: Install the LLM Model
+---
+
+### 3. Install the LLM Model
 
 ```bash
 ollama pull gemma3:4b
 ```
 
-### Step 3: Setup Environment
+---
+
+### 4. Setup Environment
 
 ```bash
 bash script/setup-env.sh
@@ -40,7 +46,9 @@ bash script/setup-env.sh
 
 This creates a stable Python `3.10` environment and installs all dependencies from `requirements.txt`.
 
-### Step 4: Run the Pipeline
+---
+
+### 5. Run the Pipeline
 
 (A) For `validation` set:
 
