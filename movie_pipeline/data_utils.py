@@ -144,6 +144,9 @@ class DataUtils:
         DataUtils.logger.info(f'Found {len(train_files)} TRAIN files:\n{train_files}')
         # Load and union all train data files.
         train_df = None
+        # TODO: remove later
+        train_files.remove('imdb/train-8.csv')
+        train_files.remove('imdb/train-8.csv_gemma3_4b_cache.csv')
         for file in train_files:
             current_df = DataUtils.load_csv(spark, file)
             if train_df is None:
