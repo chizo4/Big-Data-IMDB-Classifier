@@ -286,6 +286,28 @@ class ClassifierPipeline:
         ClassifierPipeline.logger.info('Adding "decade" feature based on "startYear" records...')
         df = df.withColumn('startYear', when(col('startYear').isNull(), 2000).otherwise(col('startYear')))
         df = df.withColumn('decade', concat(floor(col('startYear')/10).cast('int')*10, lit('s')))
+
+        # (9) Add director/writer popularity index
+        df = DataUtils.calculate_popularity_index(df, 'director')
+        df = DataUtils.calculate_popularity_index(df, 'writer')
+        self.feature_cols.update(['director_popularity', 'writer_popularity'])
+
+        # (8) Add title-based features
+        df = DataUtils.extract_title_features(df)
+        self.feature_cols.update(['title_length', 'title_word_count', 'is_sequel'])
+
+
+
+        # (10) Add votes per year feature
+        df = df.withColumn("votes_per_year", col("numVotes") / (lit(2025) - col("decade").substr(1, 4).cast("int") + 1))
+        self.feature_cols.add("votes_per_year")
+
+        # (11) Expand multi-genre into binary flags
+        df = DataUtils.expand_genres(df)
+        for g in ['action', 'adventure', 'comedy', 'drama', 'romance', 'horror', 'sci_fi', 'thriller', 'animation', 'documentary']:
+            self.feature_cols.add(f"genre_{g}")
+
+
         # ClassifierPipeline.logger.info('Decade distribution:')
         # df.groupBy('decade').count().orderBy('decade').show(20, False)
         # (5) Drop "startYear" and "endYear" cols. The first has been used for "decade",
@@ -312,11 +334,14 @@ class ClassifierPipeline:
         ClassifierPipeline.logger.info(f'Feature column names: {self.feature_cols}')
         # (7) Handle missing values.
         df = df.fillna(0)
-        # (8) Assemble all feature columns into a single vector.
+
+
+
+        # (12) Assemble all feature columns into a single vector.
         ClassifierPipeline.logger.info('Assembling features into a single vector...')
         assembler = VectorAssembler(inputCols=list(self.feature_cols), outputCol='features')
         df = assembler.transform(df)
-        # (9) Standardize numeric features.
+        # (13) Standardize numeric features.
         ClassifierPipeline.logger.info('Standardizing numerical features...')
         scaler_model = self.scaler.fit(df)
         df = scaler_model.transform(df)
@@ -355,6 +380,7 @@ class ClassifierPipeline:
         train_df = self.data_dict['train_data']
         test_df = self.data_dict['test_data']
         ClassifierPipeline.logger.info('***(1) DATA: LOADED!***')
+        train_df.toPandas().to_csv("final_train_dataframe_before_processing.csv", index=False)
         # (2) Pre-process data: TRAIN and TEST.
         ClassifierPipeline.logger.info('***(2) PRE-PROCESSING DATA...***')
         ClassifierPipeline.logger.info('***PRE-PROCESS: TRAIN SET***')
@@ -369,6 +395,7 @@ class ClassifierPipeline:
         self.classifier_model.update_feature_cols(self.feature_cols)
         ClassifierPipeline.logger.info('***FE: TEST SET***')
         test_df = self._engineer_features(test_df)
+        train_df.toPandas().to_csv("final_train_dataframe_after_processing.csv", index=False)
         ClassifierPipeline.logger.info('***(3) FEATURE ENGINEERING: COMPLETE!***')
         # (4) Train the model and save.
         ClassifierPipeline.logger.info('***(4) TRAINING CLASSIFIER MODEL...***')

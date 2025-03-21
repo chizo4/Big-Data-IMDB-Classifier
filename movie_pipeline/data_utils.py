@@ -145,8 +145,8 @@ class DataUtils:
         # Load and union all train data files.
         train_df = None
         # TODO: remove later
-        train_files.remove('imdb/train-8.csv')
-        train_files.remove('imdb/train-8.csv_gemma3_4b_cache.csv')
+        # train_files.remove('imdb/train-8.csv')
+        train_files.remove('imdb\\train-8.csv_gemma3_4b_cache.csv')
         for file in train_files:
             current_df = DataUtils.load_csv(spark, file)
             if train_df is None:
@@ -460,3 +460,42 @@ class DataUtils:
         with open(output_txt_path, 'w') as f:
             for pred in pred_strings:
                 f.write(f"{pred}\n")
+
+    @staticmethod
+    def extract_title_features(df: 'DataFrame') -> 'DataFrame':
+        from pyspark.sql.functions import length, size, split, regexp_extract
+
+        # Length and word count from primary title
+        df = df.withColumn("title_length", length(col("primaryTitle")))
+        df = df.withColumn("title_word_count", size(split(col("primaryTitle"), " ")))
+
+        # Binary feature: is it likely a sequel?
+        sequel_pattern = r'(?i)(\s+II|\s+III|\s+IV|Part\s+\d+|\d{2,})'
+        df = df.withColumn("is_sequel", when(regexp_extract(col("primaryTitle"), sequel_pattern, 0) != "", 1).otherwise(0))
+        return df
+
+    @staticmethod
+    def calculate_popularity_index(df: 'DataFrame', entity_col: str) -> 'DataFrame':
+        from pyspark.sql.functions import count
+
+        pop_df = df.groupBy(entity_col).agg(count("*").alias(f"{entity_col}_popularity"))
+        df = df.join(pop_df, on=entity_col, how="left")
+        return df
+
+
+    @staticmethod
+    def expand_genres(df: 'DataFrame', genre_col: str = "genre") -> 'DataFrame':
+        from pyspark.sql.functions import split, array_contains
+
+        genres = ['Action', 'Adventure', 'Comedy', 'Drama', 'Romance', 'Horror', 'Sci-Fi', 'Thriller', 'Animation', 'Documentary']
+        df = df.withColumn("genre_array", split(col(genre_col), ","))
+
+        for g in genres:
+            safe_name = g.lower().replace("-", "_")
+            df = df.withColumn(f"genre_{safe_name}", when(array_contains(col("genre_array"), g), 1).otherwise(0))
+
+        df = df.drop("genre_array")  # optional cleanup
+        return df
+
+            
+

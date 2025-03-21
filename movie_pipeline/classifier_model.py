@@ -106,8 +106,8 @@ class ClassifierModel:
         spark_pipeline = ml.Pipeline(stages=[self.classifier])
         self.model = spark_pipeline.fit(train_df)
         # Save model.
-        self.model.write().overwrite().save(self.model_path)
-        ClassifierModel.logger.info(f'TRAINED model saved to: "{self.model_path}"')
+        # self.model.write().overwrite().save(self.model_path)
+        # ClassifierModel.logger.info(f'TRAINED model saved to: "{self.model_path}"')
         # Analyze feature impacts.
         self._analyze_feature_importance()
 
