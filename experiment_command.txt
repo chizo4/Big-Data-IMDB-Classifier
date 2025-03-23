@@ -1,1 +1,1 @@
-bash script/run-pipeline.sh imdb directing.json writing.json train-8.csv gemma3:4b
+bash script/run-pipeline.sh imdb directing.json writing.json train-8.csv gemma3:4b tmdb-movies.csv
