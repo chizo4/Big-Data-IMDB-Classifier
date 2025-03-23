@@ -216,7 +216,7 @@ class DataUtils:
         return df
 
     @staticmethod
-    def preprocess_numeric_cols(df: 'DataFrame', cols: list, num_type: str = 'integer') -> 'DataFrame':
+    def preprocess_numeric_cols(df: 'DataFrame', cols: list, num_type: str = 'double') -> 'DataFrame':
         '''
         Handle pre-processing operations for numeric columns.
 
@@ -236,15 +236,15 @@ class DataUtils:
         '''
         for col_name in cols:
             # Convert missing values to None before type conversion. Required for Spark type casting operations.
-            df = df.withColumn(col_name, when(col('runtimeMinutes') == '\\N', None).otherwise(col(col_name)))
-            # Convert the current column to the proper numeric type: INT.
+            df = df.withColumn(col_name, when(col(col_name) == '\\N', None).otherwise(col(col_name)))
+            # Convert the current column to the proper numeric type: double.
             df = df.withColumn(col_name, col(col_name).cast(num_type))
         return df
 
     @staticmethod
-    def calc_median_col(df: 'DataFrame', col_name: str) -> int:
+    def calc_mean_col(df: 'DataFrame', col_name: str) -> float:
         '''
-        Calculate median values per specified numeric column.
+        Calculate mean values per specified numeric column.
 
             Parameters:
             -----------
@@ -255,13 +255,13 @@ class DataUtils:
 
             Returns:
             -----------
-            col_median_int : int
-                The calculated median value for the specified column.
+            col_mean_float : float
+                The calculated mean value for the specified column.
         '''
-        # Compute median for the target column.
-        col_median_int = int(df.approxQuantile(col_name, [0.5], 0.0)[0])
-        DataUtils.logger.info(f'Median: {col_name} = {col_median_int}')
-        return col_median_int
+        mean_value = df.select(col_name).agg({col_name: 'avg'}).collect()[0][0]
+        col_mean_float = float(mean_value) if mean_value is not None else 1
+        DataUtils.logger.info(f'Mean: {col_name} = {col_mean_float}')
+        return col_mean_float
 
     @staticmethod
     def string_index_col(df: 'DataFrame', col_name: str, return_model: bool=False) -> tuple:

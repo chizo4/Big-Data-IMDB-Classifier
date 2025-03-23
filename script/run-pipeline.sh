@@ -14,23 +14,24 @@
 # any choices as long as they are pull via ollama. We recommend gemma3:4b though.
 #
 # USAGE:
-# bash script/run-pipeline.sh [data_path] [direct_json] [write_json] [test_csv] [model]
+# bash script/run-pipeline.sh [data_path] [direct_json] [write_json] [test_csv] [model] [extra_data_csv]
 #
 # EXAMPLE (for the task of "IMDB" on TEST data):
 # bash script/run-pipeline.sh imdb directing.json writing.json test_hidden.csv gemma3:4b
 #
 # OPTIONS:
-# [data_path]   -> Base path to access the directory with movie data.
-# [direct_json] -> Name of the directing JSON file, assuming it is in data_path.
-# [write_json]  -> Name of the writing JSON file, assuming it is in data_path.
-# [test_csv]    -> Name of the validation CSV file. Just filename, since we assume it is in data_path.
-# [model]       -> Name of the LLM provided in ollama API.
+# [data_path]       -> Base path to access the directory with movie data.
+# [direct_json]     -> Name of the directing JSON file, assuming it is in data_path.
+# [write_json]      -> Name of the writing JSON file, assuming it is in data_path.
+# [test_csv]        -> Name of the validation CSV file. Just filename, since we assume it is in data_path.
+# [model]           -> Name of the LLM provided in ollama API.
+# [extra_data_csv]  -> Name of the extra data CSV file. Just filename, since we assume it is in data_path.
 
 ########################### CONFIGURATION & SETUP ###########################
 
 # STEP 0: Check if the correct number of arguments is provided.
-if [ "$#" -ne 5 ]; then
-    echo "Usage: $0 [data_path] [direct_json] [write_json] [test_csv] [model]"
+if [ "$#" -ne 6 ]; then
+    echo "Usage: $0 [data_path] [direct_json] [write_json] [test_csv] [model] [extra_data_csv]"
     exit 1
 fi
 
@@ -40,6 +41,7 @@ DIRECT_JSON="$DATA_PATH/$2"
 WRITE_JSON="$DATA_PATH/$3"
 TEST_CSV="$DATA_PATH/$4"
 MODEL=$5
+EXTRA_DATA_CSV=$6
 
 # STEP 2: Setup for input/output resources.
 echo "START: PIPELINE task initialization - verifying configuration..."; echo
@@ -89,4 +91,5 @@ python movie_pipeline/runner.py \
     --model-path "$MODEL_DIR" \
     --results-path "$RESULTS_DIR" \
     --test-csv "$TEST_CSV" \
-    --model "$MODEL"
+    --model "$MODEL" \
+    --extra-data-csv "$EXTRA_DATA_CSV"

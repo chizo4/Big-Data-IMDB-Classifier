@@ -88,6 +88,12 @@ class Runner:
             required=True,
             help='Path to the prediction CSV file.'
         )
+        parser.add_argument(
+            '--extra-data-csv',
+            type=str,
+            required=True,
+            help='Path to additional movie data source.'
+        )
         # Optional args.
         parser.add_argument(
             '--model',
@@ -144,6 +150,7 @@ class Runner:
             model_name=model_name,
             base_path=self.args.results_path
         )
+        self.extra_data_csv_path = f'{data_path}/{self.args.extra_data_csv}'
 
     def __call__(self: 'Runner') -> None:
         '''
@@ -164,7 +171,8 @@ class Runner:
         pipeline.run(
             train_csv_path=self.train_csv_path,
             test_csv_path=self.args.test_csv,
-            output_txt_path=self.pred_path
+            output_txt_path=self.pred_path,
+            extra_data_csv_path=self.extra_data_csv_path
         )
         self.logger.info('***SUCCESS: PIPELINE COMPLETE!***')
 
