@@ -144,9 +144,6 @@ class DataUtils:
         DataUtils.logger.info(f'Found {len(train_files)} TRAIN files:\n{train_files}')
         # Load and union all train data files.
         train_df = None
-        # TODO: remove later (next 2 lines)
-        train_files.remove('imdb/train-8.csv')
-        train_files.remove('imdb/train-8.csv_gemma3_4b_cache.csv')
         for file in train_files:
             current_df = DataUtils.load_csv(spark, file)
             if train_df is None:
@@ -219,7 +216,7 @@ class DataUtils:
         return df
 
     @staticmethod
-    def preprocess_numeric_cols(df: 'DataFrame', cols: list, num_type: str = 'integer') -> 'DataFrame':
+    def preprocess_numeric_cols(df: 'DataFrame', cols: list, num_type: str = 'double') -> 'DataFrame':
         '''
         Handle pre-processing operations for numeric columns.
 
@@ -240,12 +237,12 @@ class DataUtils:
         for col_name in cols:
             # Convert missing values to None before type conversion. Required for Spark type casting operations.
             df = df.withColumn(col_name, when(col(col_name) == '\\N', None).otherwise(col(col_name)))
-            # Convert the current column to the proper numeric type: INT.
+            # Convert the current column to the proper numeric type: double.
             df = df.withColumn(col_name, col(col_name).cast(num_type))
         return df
 
     @staticmethod
-    def calc_mean_col(df: 'DataFrame', col_name: str) -> int:
+    def calc_mean_col(df: 'DataFrame', col_name: str) -> float:
         '''
         Calculate mean values per specified numeric column.
 
@@ -258,13 +255,13 @@ class DataUtils:
 
             Returns:
             -----------
-            col_mean_int : int
+            col_mean_float : float
                 The calculated mean value for the specified column.
         '''
         mean_value = df.select(col_name).agg({col_name: 'avg'}).collect()[0][0]
-        col_mean_int = int(mean_value) if mean_value is not None else 1
-        DataUtils.logger.info(f'Mean: {col_name} = {col_mean_int}')
-        return col_mean_int
+        col_mean_float = float(mean_value) if mean_value is not None else 1
+        DataUtils.logger.info(f'Mean: {col_name} = {col_mean_float}')
+        return col_mean_float
 
     @staticmethod
     def string_index_col(df: 'DataFrame', col_name: str, return_model: bool=False) -> tuple:

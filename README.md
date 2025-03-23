@@ -53,13 +53,13 @@ This creates a stable Python `3.10` environment and installs all dependencies fr
 (A) For `validation` set:
 
 ```bash
-bash script/run-pipeline.sh imdb directing.json writing.json validation_hidden.csv gemma3:4b
+bash script/run-pipeline.sh imdb directing.json writing.json validation_hidden.csv gemma3:4b TMDB_movie_dataset_v11.csv
 ```
 
 (B) For `test` set:
 
 ```bash
-bash script/run-pipeline.sh imdb directing.json writing.json test_hidden.csv gemma3:4b
+bash script/run-pipeline.sh imdb directing.json writing.json test_hidden.csv gemma3:4b TMDB_movie_dataset_v11.csv
 ```
 
 ---

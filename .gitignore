@@ -129,5 +129,5 @@ gh_token.txt
 # Project-specific: model storage.
 model/
 imdb/medians.json
-# train-8.csv_gemma3_4b_cache.csv
-# test.ipynb
+train-8.csv_gemma3_4b_cache.csv
+test.ipynb
