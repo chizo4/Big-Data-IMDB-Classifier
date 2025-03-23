@@ -239,15 +239,15 @@ class DataUtils:
         '''
         for col_name in cols:
             # Convert missing values to None before type conversion. Required for Spark type casting operations.
-            df = df.withColumn(col_name, when(col('runtimeMinutes') == '\\N', None).otherwise(col(col_name)))
+            df = df.withColumn(col_name, when(col(col_name) == '\\N', None).otherwise(col(col_name)))
             # Convert the current column to the proper numeric type: INT.
             df = df.withColumn(col_name, col(col_name).cast(num_type))
         return df
 
     @staticmethod
-    def calc_median_col(df: 'DataFrame', col_name: str) -> int:
+    def calc_mean_col(df: 'DataFrame', col_name: str) -> int:
         '''
-        Calculate median values per specified numeric column.
+        Calculate mean values per specified numeric column.
 
             Parameters:
             -----------
@@ -258,13 +258,13 @@ class DataUtils:
 
             Returns:
             -----------
-            col_median_int : int
-                The calculated median value for the specified column.
+            col_mean_int : int
+                The calculated mean value for the specified column.
         '''
-        # Compute median for the target column.
-        col_median_int = int(df.approxQuantile(col_name, [0.5], 0.0)[0])
-        DataUtils.logger.info(f'Median: {col_name} = {col_median_int}')
-        return col_median_int
+        mean_value = df.select(col_name).agg({col_name: 'avg'}).collect()[0][0]
+        col_mean_int = int(mean_value) if mean_value is not None else 1
+        DataUtils.logger.info(f'Mean: {col_name} = {col_mean_int}')
+        return col_mean_int
 
     @staticmethod
     def string_index_col(df: 'DataFrame', col_name: str, return_model: bool=False) -> tuple:
